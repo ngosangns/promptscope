@@ -6,19 +6,28 @@ public enum SessionAnalyzer {
         case .grok: GrokAnalyzer.report(ref)
         case .kiroIDE: KiroIDEAnalyzer.report(ref)
         case .kiroCLI: KiroCLIAnalyzer.report(ref)
+        case .omp, .pi: PiFamilyAnalyzer.report(ref)
+        case .devin: DevinAnalyzer.report(ref)
         }
     }
 
     public static func digest(for ref: SessionRef) -> SessionDigest {
         switch ref.source {
         case .grok: GrokAnalyzer.digest(ref)
-        case .kiroIDE, .kiroCLI: report(for: ref).digest()
+        case .omp, .pi: PiFamilyAnalyzer.digest(ref)
+        case .kiroIDE, .kiroCLI, .devin: report(for: ref).digest()
         }
     }
 }
 
 public enum LibraryScanner {
-    public static func scan(grokHome: URL, kiroHome: URL) -> LibraryScan {
+    public static func scan(
+        grokHome: URL,
+        kiroHome: URL,
+        ompHome: URL,
+        piHome: URL,
+        devinHome: URL
+    ) -> LibraryScan {
         var sessions: [SessionRef] = []
         var notes: [String] = []
         var skipped = 0
@@ -35,6 +44,24 @@ public enum LibraryScanner {
         } else {
             notes.append("Không thấy \(kiroHome.path)/sessions.")
         }
+        let ompSessions = ompHome.appendingPathComponent("agent/sessions")
+        if FileManager.default.fileExists(atPath: ompSessions.path) {
+            sessions.append(contentsOf: scanPiFamily(ompSessions, source: .omp))
+        } else {
+            notes.append("Không thấy \(ompSessions.path).")
+        }
+        let piSessions = piHome.appendingPathComponent("agent/sessions")
+        if FileManager.default.fileExists(atPath: piSessions.path) {
+            sessions.append(contentsOf: scanPiFamily(piSessions, source: .pi))
+        } else {
+            notes.append("Không thấy \(piSessions.path).")
+        }
+        let devinTranscripts = devinHome.appendingPathComponent("cli/transcripts")
+        if FileManager.default.fileExists(atPath: devinTranscripts.path) {
+            sessions.append(contentsOf: scanDevin(devinTranscripts))
+        } else {
+            notes.append("Không thấy \(devinTranscripts.path).")
+        }
         return LibraryScan(sessions: sessions, skippedEmptyCLI: skipped, notes: notes)
     }
 
@@ -44,6 +71,19 @@ public enum LibraryScanner {
 
     public static var defaultKiroHome: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kiro")
+    }
+
+    public static var defaultOmpHome: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".omp")
+    }
+
+    public static var defaultPiHome: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi")
+    }
+
+    public static var defaultDevinHome: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/devin")
     }
 }
 
@@ -207,6 +247,154 @@ private func cliPromptTitle(_ url: URL) -> String? {
         return false
     }
     return title
+}
+
+private func scanPiFamily(_ root: URL, source: AgentSource) -> [SessionRef] {
+    guard let groups = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ) else { return [] }
+    var sessions: [SessionRef] = []
+    for group in groups where isDirectory(group) {
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: group,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { continue }
+        for child in children where child.pathExtension == "jsonl" && Files.size(child) > 0 {
+            sessions.append(piSession(child, source: source, subagent: false))
+        }
+        for child in children where isDirectory(child) {
+            guard let nested = try? FileManager.default.contentsOfDirectory(
+                at: child,
+                includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for file in nested where file.pathExtension == "jsonl" && Files.size(file) > 0 {
+                sessions.append(piSession(file, source: source, subagent: true))
+            }
+        }
+    }
+    return sessions
+}
+
+private func piSession(_ url: URL, source: AgentSource, subagent: Bool) -> SessionRef {
+    let header = readPiHeader(url)
+    let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+    let sessionID = header.id.isEmpty ? url.deletingPathExtension().lastPathComponent : header.id
+    let title = header.title.isEmpty ? sessionID : header.title
+    let updated = header.updated ?? modified ?? header.created
+    return SessionRef(
+        id: "\(source.rawValue):\(sessionID)",
+        source: source,
+        sessionID: sessionID,
+        title: title,
+        cwd: header.cwd,
+        model: header.model,
+        agent: nil,
+        createdAt: header.created,
+        updatedAt: updated,
+        locator: url.path,
+        transcriptBytes: Files.size(url),
+        isSubagent: subagent,
+        isTemporary: Paths.isTemporary(header.cwd),
+        contextPercent: nil,
+        fingerprint: "\(Files.size(url))|\(updated?.timeIntervalSince1970 ?? 0)"
+    )
+}
+
+private struct PiHeader {
+    var id = ""
+    var cwd = ""
+    var title = ""
+    var model: String?
+    var created: Date?
+    var updated: Date?
+}
+
+private func readPiHeader(_ url: URL) -> PiHeader {
+    var header = PiHeader()
+    var hasTitle = false
+    var hasSession = false
+    var hasModel = false
+    _ = Files.forEachLine(url: url, maxBytes: 256 * 1024) { line in
+        guard let object = JSONFile.lineObject(line) else { return true }
+        switch object["type"] as? String {
+        case "title":
+            header.title = nonEmpty(object["title"]) ?? header.title
+            header.updated = Dates.parse(object["updatedAt"] as? String) ?? header.updated
+            hasTitle = !header.title.isEmpty
+        case "session":
+            header.id = nonEmpty(object["id"]) ?? header.id
+            header.cwd = object["cwd"] as? String ?? header.cwd
+            header.created = Dates.parse(object["timestamp"] as? String) ?? header.created
+            hasSession = !header.id.isEmpty
+        case "model_change":
+            header.model = nonEmpty(object["model"]) ?? nonEmpty(object["modelId"]) ?? header.model
+            hasModel = header.model != nil
+        case "message":
+            let message = object["message"] as? [String: Any]
+            if message?["role"] as? String == "user", header.title.isEmpty {
+                header.title = PromptText.preview(piContent(message?["content"]), limit: 90)
+                return false
+            }
+        default:
+            break
+        }
+        if hasTitle && hasSession && hasModel { return false }
+        return true
+    }
+    return header
+}
+
+private func piContent(_ content: Any?) -> String {
+    if let text = content as? String { return text }
+    guard let parts = content as? [Any] else { return "" }
+    return parts.compactMap { ($0 as? [String: Any])?["text"] as? String }.joined(separator: " ")
+}
+
+private func scanDevin(_ root: URL) -> [SessionRef] {
+    guard let files = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+        options: [.skipsHiddenFiles]
+    ) else { return [] }
+    var sessions: [SessionRef] = []
+    for file in files where file.pathExtension == "json" && Files.size(file) > 32 {
+        let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let object = JSONFile.object(url: file, maxBytes: 8_000_000)
+        let sessionID = nonEmpty(object?["session_id"]) ?? file.deletingPathExtension().lastPathComponent
+        let agent = object?["agent"] as? [String: Any]
+        let model = nonEmpty(agent?["model_name"])
+        let steps = object?["steps"] as? [[String: Any]] ?? []
+        let created = Dates.parse(steps.first?["timestamp"] as? String)
+        let updated = Dates.parse(steps.last?["timestamp"] as? String) ?? modified
+        var title = ""
+        for step in steps where step["source"] as? String == "user" {
+            title = PromptText.preview(step["message"] as? String ?? "", limit: 90)
+            if !title.isEmpty { break }
+        }
+        if title.isEmpty { title = sessionID }
+        sessions.append(SessionRef(
+            id: "devin:\(sessionID)",
+            source: .devin,
+            sessionID: sessionID,
+            title: title,
+            cwd: "",
+            model: model,
+            agent: nonEmpty(agent?["name"]),
+            createdAt: created,
+            updatedAt: updated ?? created,
+            locator: file.path,
+            transcriptBytes: Files.size(file),
+            isSubagent: false,
+            isTemporary: false,
+            contextPercent: nil,
+            fingerprint: "\(Files.size(file))|\(updated?.timeIntervalSince1970 ?? 0)"
+        ))
+    }
+    return sessions
 }
 
 private func isDirectory(_ url: URL) -> Bool {

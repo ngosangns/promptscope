@@ -47,6 +47,25 @@ enum Files {
         return truncated && !stop
     }
 
+    /// The last `maxBytes` of a file, for reading a trailing usage record without the whole transcript.
+    static func tail(url: URL, maxBytes: Int) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? handle.close() }
+        do {
+            let end = try handle.seekToEnd()
+            let back = UInt64(max(maxBytes, 0))
+            if end > back {
+                try handle.seek(toOffset: end - back)
+            } else {
+                try handle.seek(toOffset: 0)
+            }
+            let data = try handle.readToEnd() ?? Data()
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return ""
+        }
+    }
+
     static func readText(url: URL, maxBytes: Int) -> (String, Bool) {
         var parts: [String] = []
         let truncated = forEachLine(url: url, maxBytes: maxBytes) { line in
@@ -362,10 +381,12 @@ private func isSkillName<S: StringProtocol>(_ name: S) -> Bool {
     !name.isEmpty && name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." }
 }
 
-private func skillOrigin(_ path: String?) -> String {
+func skillOrigin(_ path: String?) -> String {
     guard let path else { return "không rõ" }
     if path.contains("/bundled/skills/") || path.contains("/.grok/bundled/") { return "bundled" }
-    if path.contains("/.grok/skills/") || path.contains("/.kiro/skills/") || path.contains("/.agents/skills/") {
+    if path.contains("/.grok/skills/") || path.contains("/.kiro/skills/") || path.contains("/.agents/skills/")
+        || path.contains("/.pi/agent/skills/") || path.contains("/.omp/agent/skills/")
+        || path.contains("/.config/devin/skills/") {
         return "user"
     }
     return "project"

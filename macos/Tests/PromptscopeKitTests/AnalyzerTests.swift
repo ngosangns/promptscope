@@ -123,7 +123,14 @@ final class AnalyzerTests: XCTestCase {
             "updated_at": "2026-10-17T10:05:00Z",
         ], session.appendingPathComponent("summary.json"))
 
-        let scan = LibraryScanner.scan(grokHome: root.appendingPathComponent("grok-home-missing"), kiroHome: root)
+        let missing = root.appendingPathComponent("missing")
+        let scan = LibraryScanner.scan(
+            grokHome: root.appendingPathComponent("grok-home-missing"),
+            kiroHome: root,
+            ompHome: missing,
+            piHome: missing,
+            devinHome: missing
+        )
         _ = scan
         let ref = SessionRef(
             id: "grok:sess",
@@ -253,7 +260,14 @@ final class AnalyzerTests: XCTestCase {
             ["version": "v1", "kind": "Prompt", "data": ["content": [["kind": "text", "data": "sub task"]]]],
         ], cli.appendingPathComponent("cli-sub.jsonl"))
 
-        let scan = LibraryScanner.scan(grokHome: grokHome, kiroHome: kiroHome)
+        let missing = root.appendingPathComponent("missing-agents")
+        let scan = LibraryScanner.scan(
+            grokHome: grokHome,
+            kiroHome: kiroHome,
+            ompHome: missing,
+            piHome: missing,
+            devinHome: missing
+        )
         XCTAssertEqual(scan.skippedEmptyCLI, 1)
         let byID = Dictionary(uniqueKeysWithValues: scan.sessions.map { ($0.sessionID, $0) })
         XCTAssertEqual(byID["sub-1"]?.isSubagent, true)
@@ -278,6 +292,186 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(cliReport.tools.first { $0.name == "shell" }?.resultBytes ?? 0, 0)
         XCTAssertEqual(cliReport.turns.first?.preview, "Remove the MCP backend")
         XCTAssertTrue(cliReport.notes.contains { $0.contains("200000") })
+    }
+
+    func testPiOmpAndDevin() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let skill = root.appendingPathComponent(".pi/agent/skills/alpha-skill/SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "skill body".write(to: skill, atomically: true, encoding: .utf8)
+
+        let piDir = root.appendingPathComponent("pi/agent/sessions/--proj--", isDirectory: true)
+        try FileManager.default.createDirectory(at: piDir, withIntermediateDirectories: true)
+        let piFile = piDir.appendingPathComponent("sess.jsonl")
+        try writeJSONLines([
+            ["type": "session", "id": "pi-1", "timestamp": "2026-10-04T07:19:44Z", "cwd": "/Users/me/app"],
+            ["type": "model_change", "modelId": "swe-2"],
+            ["type": "message", "message": [
+                "role": "system",
+                "content": "",
+                "sections": [
+                    "preamble": "You are pi.",
+                    "tools": "<tools>\n- read: Read\n</tools>",
+                    "rules": "<rules>\nBe brief.\n</rules>",
+                    "skills": """
+                    <skills>
+                    <skill>
+                    <name>alpha-skill</name>
+                    <description>Reads things.</description>
+                    <location>\(skill.path)</location>
+                    </skill>
+                    </skills>
+                    """,
+                    "mcp_servers": "<mcp_servers>\n- mcp__browseros_neo (codemode): Browser for agents.\n</mcp_servers>",
+                    "cwd": "<cwd>\n/Users/me/app\n</cwd>",
+                ],
+                "toolsAdded": [["name": "read", "description": "Read a file"]],
+            ]],
+            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "đọc skill"]]]],
+            ["type": "message", "message": [
+                "role": "assistant",
+                "content": [[
+                    "type": "toolCall",
+                    "name": "read",
+                    "arguments": ["path": skill.path],
+                ]],
+                "usage": ["input": 100, "cacheRead": 50, "output": 10, "totalTokens": 160],
+            ]],
+        ], piFile)
+
+        let ompDir = root.appendingPathComponent("omp/agent/sessions/-proj", isDirectory: true)
+        try FileManager.default.createDirectory(at: ompDir, withIntermediateDirectories: true)
+        try writeJSONLines([
+            ["type": "title", "title": "Sửa daemon", "updatedAt": "2026-10-08T08:40:00Z"],
+            ["type": "session", "id": "omp-1", "timestamp": "2026-10-08T08:36:39Z", "cwd": "/Users/me/app"],
+            ["type": "model_change", "model": "kiro/claude"],
+            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "sửa daemon"]]]],
+            ["type": "message", "message": [
+                "role": "assistant",
+                "content": [["type": "toolCall", "name": "read", "arguments": ["path": skill.path]]],
+                "usage": [
+                    "input": 20000, "cacheRead": 0, "output": 10, "totalTokens": 20010,
+                    "contextPercent": 10.0,
+                ],
+                "contextSnapshot": ["promptTokens": 20000, "nonMessageTokens": 1500],
+            ]],
+        ], ompDir.appendingPathComponent("main.jsonl"))
+        let childDir = ompDir.appendingPathComponent("main", isDirectory: true)
+        try FileManager.default.createDirectory(at: childDir, withIntermediateDirectories: true)
+        try writeJSONLines([
+            ["type": "session", "id": "omp-child", "timestamp": "2026-10-08T08:41:00Z", "cwd": "/Users/me/app"],
+            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "sub task"]]]],
+        ], childDir.appendingPathComponent("child.jsonl"))
+
+        let devinDir = root.appendingPathComponent("devin/cli/transcripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: devinDir, withIntermediateDirectories: true)
+        try writeJSON([
+            "schema_version": "ATIF-v1.7",
+            "session_id": "calm-session",
+            "agent": [
+                "name": "devin",
+                "model_name": "SWE-2 High",
+                "tool_definitions": [[
+                    "type": "function",
+                    "function": ["name": "skill", "description": "Invoke a skill"],
+                ]],
+            ],
+            "steps": [
+                [
+                    "step_id": 1, "source": "system", "timestamp": "2026-10-15T16:24:38Z",
+                    "message": "You are Devin, an interactive command line agent.",
+                    "extra": ["telemetry": ["source": "sysprompt", "operation": "normal"]],
+                ],
+                [
+                    "step_id": 2, "source": "system", "timestamp": "2026-10-15T16:24:39Z",
+                    "message": """
+                    ## Available MCP Servers
+                    {"servers":[{"name":"context7","description":"Docs for libraries."}]}
+                    """,
+                ],
+                [
+                    "step_id": 3, "source": "system", "timestamp": "2026-10-15T16:24:40Z",
+                    "message": """
+                    <available_skills>
+                    - **alpha-skill**: Reads the repo.
+                    - **daily-report**: Writes the report.
+                    </available_skills>
+                    """,
+                ],
+                [
+                    "step_id": 4, "source": "user", "timestamp": "2026-10-15T16:25:00Z",
+                    "message": "dùng skill alpha",
+                ],
+                [
+                    "step_id": 5, "source": "agent", "timestamp": "2026-10-15T16:25:10Z",
+                    "message": "Đang mở skill.",
+                    "metrics": ["prompt_tokens": 4321, "completion_tokens": 20],
+                    "tool_calls": [[
+                        "tool_call_id": "c1",
+                        "function_name": "skill",
+                        "arguments": ["name": "alpha-skill"],
+                    ]],
+                    "observation": ["results": [["source_call_id": "c1", "content": "skill body"]]],
+                ],
+            ],
+        ], devinDir.appendingPathComponent("calm-session.json"))
+
+        let missing = root.appendingPathComponent("missing")
+        let scan = LibraryScanner.scan(
+            grokHome: missing, kiroHome: missing,
+            ompHome: root.appendingPathComponent("omp"),
+            piHome: root.appendingPathComponent("pi"),
+            devinHome: root.appendingPathComponent("devin")
+        )
+        let byID = Dictionary(uniqueKeysWithValues: scan.sessions.map { ($0.sessionID, $0) })
+        XCTAssertEqual(byID["pi-1"]?.source, .pi)
+        XCTAssertEqual(byID["pi-1"]?.cwd, "/Users/me/app")
+        XCTAssertEqual(byID["pi-1"]?.title, "đọc skill")
+        XCTAssertEqual(byID["omp-1"]?.title, "Sửa daemon")
+        XCTAssertEqual(byID["omp-1"]?.model, "kiro/claude")
+        XCTAssertEqual(byID["omp-child"]?.isSubagent, true)
+        XCTAssertEqual(byID["calm-session"]?.source, .devin)
+        XCTAssertEqual(byID["calm-session"]?.model, "SWE-2 High")
+        XCTAssertEqual(byID["calm-session"]?.title, "dùng skill alpha")
+
+        let piReport = SessionAnalyzer.report(for: byID["pi-1"]!)
+        XCTAssertEqual(piReport.skills.first?.name, "alpha-skill")
+        XCTAssertEqual(piReport.skills.first?.origin, "user")
+        XCTAssertEqual(piReport.skills.first?.readCount, 1)
+        XCTAssertEqual(piReport.skills.first?.diskBytes, "skill body".utf8.count)
+        XCTAssertEqual(piReport.mcp.first?.name, "browseros_neo")
+        XCTAssertEqual(piReport.mcp.first?.status, "codemode")
+        XCTAssertGreaterThan(piReport.standing.first { $0.kind == .system }?.bytes ?? 0, 0)
+        XCTAssertGreaterThan(piReport.standing.first { $0.kind == .skills }?.bytes ?? 0, 0)
+        XCTAssertEqual(piReport.promptTokens, 150)
+        XCTAssertEqual(piReport.tools.first { $0.name == "read" }?.calls, 1)
+        XCTAssertEqual(piReport.turns.first?.preview, "đọc skill")
+        let piDigest = SessionAnalyzer.digest(for: byID["pi-1"]!)
+        XCTAssertEqual(piDigest.promptTokens, 150)
+        XCTAssertGreaterThan(piDigest.standingBytes, 0)
+
+        let ompReport = SessionAnalyzer.report(for: byID["omp-1"]!)
+        XCTAssertEqual(ompReport.standingBytes, 0)
+        XCTAssertEqual(ompReport.skills.first?.name, "alpha-skill")
+        XCTAssertEqual(ompReport.skills.first?.readCount, 1)
+        XCTAssertEqual(ompReport.promptTokens, 20000)
+        XCTAssertEqual(ompReport.contextPercent ?? 0, 10, accuracy: 0.01)
+        XCTAssertEqual(ompReport.contextWindow, 200000)
+        XCTAssertEqual(ompReport.sections.isEmpty, true)
+        XCTAssertTrue(ompReport.notes.contains { $0.contains("không lưu") })
+
+        let devinReport = SessionAnalyzer.report(for: byID["calm-session"]!)
+        XCTAssertEqual(devinReport.skills.map(\.name), ["alpha-skill", "daily-report"])
+        XCTAssertEqual(devinReport.skills.first?.readCount, 1)
+        XCTAssertEqual(devinReport.mcp.first?.name, "context7")
+        XCTAssertGreaterThan(devinReport.mcp.first?.catalogBytes ?? 0, 0)
+        XCTAssertEqual(devinReport.promptTokens, 4321)
+        XCTAssertGreaterThan(devinReport.standing.first { $0.kind == .system }?.bytes ?? 0, 0)
+        XCTAssertGreaterThan(devinReport.standing.first { $0.kind == .toolDefs }?.bytes ?? 0, 0)
+        XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.calls, 1)
+        XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.resultBytes, "skill body".utf8.count)
+        XCTAssertEqual(devinReport.turns.first?.preview, "dùng skill alpha")
     }
 
     private func makeTemp() throws -> URL {

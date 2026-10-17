@@ -3,28 +3,6 @@ import Foundation
 import Observation
 import PromptscopeKit
 
-enum SourceFilter: String, CaseIterable, Identifiable {
-    case all, grok, kiroIDE, kiroCLI
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .all: "Tất cả"
-        case .grok: "Grok"
-        case .kiroIDE: "Kiro"
-        case .kiroCLI: "CLI"
-        }
-    }
-
-    var source: AgentSource? {
-        switch self {
-        case .all: nil
-        case .grok: .grok
-        case .kiroIDE: .kiroIDE
-        case .kiroCLI: .kiroCLI
-        }
-    }
-}
-
 struct SkillTax: Identifiable {
     var id: String { name }
     var name: String
@@ -41,7 +19,7 @@ final class AppModel {
     var report: SessionReport?
     var selectedID: String?
     var query = ""
-    var source: SourceFilter = .all
+    var source: AgentSource?
     var workspace: String?
     var hideNoise = true
     var measureProgress: Double?
@@ -59,7 +37,7 @@ final class AppModel {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return sessions.filter { ref in
             if hideNoise && ref.isNoise { return false }
-            if let wanted = source.source, ref.source != wanted { return false }
+            if let source, ref.source != source { return false }
             if let workspace, ref.cwd != workspace { return false }
             guard !needle.isEmpty else { return true }
             let blob = "\(ref.title) \(ref.cwd) \(ref.sessionID) \(ref.model ?? "") \(ref.agent ?? "")".lowercased()
@@ -71,7 +49,7 @@ final class AppModel {
     var workspaces: [(cwd: String, label: String)] {
         let pool = sessions.filter { ref in
             if hideNoise && ref.isNoise { return false }
-            if let wanted = source.source, ref.source != wanted { return false }
+            if let source, ref.source != source { return false }
             return true
         }
         let counts = Dictionary(grouping: pool, by: \.cwd).mapValues(\.count)
@@ -80,6 +58,15 @@ final class AppModel {
                 let name = cwd.isEmpty ? "(trống)" : Paths.short(cwd)
                 return (cwd, "\(name)  \(counts[cwd] ?? 0)")
             }
+    }
+
+    /// Counts for the source list. Search and workspace do not change these.
+    var sourceCounts: [AgentSource: Int] {
+        var counts: [AgentSource: Int] = [:]
+        for ref in sessions where !(hideNoise && ref.isNoise) {
+            counts[ref.source, default: 0] += 1
+        }
+        return counts
     }
 
     var measured: [SessionDigest] {
@@ -124,7 +111,10 @@ final class AppModel {
             let scan = await Task.detached {
                 LibraryScanner.scan(
                     grokHome: LibraryScanner.defaultGrokHome,
-                    kiroHome: LibraryScanner.defaultKiroHome
+                    kiroHome: LibraryScanner.defaultKiroHome,
+                    ompHome: LibraryScanner.defaultOmpHome,
+                    piHome: LibraryScanner.defaultPiHome,
+                    devinHome: LibraryScanner.defaultDevinHome
                 )
             }.value
             guard token == generation else { return }

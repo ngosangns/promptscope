@@ -1,4 +1,3 @@
-import AppKit
 import PromptscopeKit
 import SwiftUI
 
@@ -9,14 +8,10 @@ struct SessionDetailView: View {
     var body: some View {
         let ref = report.ref
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(ref.source.label)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Theme.color(.skills).opacity(0.18), in: Capsule())
+                        Tag(text: ref.source.label, tint: Theme.agent(ref.source))
                         Text(ref.title)
                             .font(.largeTitle.weight(.semibold))
                             .textSelection(.enabled)
@@ -32,13 +27,17 @@ struct SessionDetailView: View {
                         }
                     }
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Button("Hiện trong Finder") { model.revealSelected() }
-                        Button("Chép phân tích") { model.copyReport() }
+                    VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+                        Button { model.revealSelected() } label: {
+                            Label("Hiện trong Finder", systemImage: Icon.reveal)
+                        }
+                        Button { model.copyReport() } label: {
+                            Label("Chép phân tích", systemImage: Icon.copy)
+                        }
                     }
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: Theme.Space.md)], spacing: Theme.Space.md) {
                     Metric(
                         title: "Prompt đứng",
                         value: ByteFormat.bytes(report.standingBytes),
@@ -82,8 +81,8 @@ struct SessionDetailView: View {
                 }
 
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) { skillAndMcp }
-                    VStack(alignment: .leading, spacing: 16) { skillAndMcp }
+                    HStack(alignment: .top, spacing: Theme.Space.lg) { skillAndMcp }
+                    VStack(alignment: .leading, spacing: Theme.Space.lg) { skillAndMcp }
                 }
 
                 if !report.steering.isEmpty {
@@ -124,7 +123,7 @@ struct SessionDetailView: View {
 
                 if !report.turns.isEmpty {
                     SectionCard(title: "Lượt", subtitle: "Câu user và phần trả lời phía sau, đến lượt kế.") {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: Theme.Space.sm) {
                             ForEach(report.turns) { turn in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("\(turn.index). \(turn.preview)")
@@ -149,7 +148,7 @@ struct SessionDetailView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(Theme.Space.xl)
             .frame(maxWidth: 1040, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -172,15 +171,21 @@ struct SessionDetailView: View {
         if let percent = report.contextPercent {
             return String(format: "%.1f%%", percent)
         }
+        if let tokens = report.promptTokens {
+            return ByteFormat.exactTokens(tokens)
+        }
         return "—"
     }
 
     private var contextCaption: String {
         if let window = report.contextWindow, let percent = report.contextPercent {
-            let used = Int((percent / 100) * Double(window))
+            let used = report.promptTokens ?? Int((percent / 100) * Double(window))
             return "\(used) / \(window) token"
         }
-        return "Grok không ghi context % vào session"
+        if report.promptTokens != nil {
+            return "token đầu vào, lần model cuối"
+        }
+        return "Log không ghi context %"
     }
 
     @ViewBuilder
@@ -202,7 +207,7 @@ struct SessionDetailView: View {
     }
 
     private var skillTable: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.sm) {
             ForEach(report.skills.prefix(40)) { skill in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -226,16 +231,12 @@ struct SessionDetailView: View {
     }
 
     private var mcpTable: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Theme.Space.sm) {
             ForEach(report.mcp) { server in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text(server.name).font(.body.weight(.medium))
-                        Text(server.status)
-                            .font(.caption)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(statusColor(server.status).opacity(0.18), in: Capsule())
+                        Tag(text: server.status, tint: statusColor(server.status))
                         Spacer()
                         Text(ByteFormat.bytes(server.catalogBytes)).monospacedDigit()
                     }
@@ -276,7 +277,7 @@ struct SessionDetailView: View {
 
     private func barRows(_ rows: [(String, String, Int, String)], tint: Color) -> some View {
         let total = max(rows.reduce(0) { $0 + $1.2 }, 1)
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: Theme.Space.sm) {
             ForEach(rows, id: \.0) { row in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {

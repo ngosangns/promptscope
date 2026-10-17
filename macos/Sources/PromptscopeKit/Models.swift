@@ -1,15 +1,23 @@
 import Foundation
 
-public enum AgentSource: String, Codable, Sendable, CaseIterable {
+public enum AgentSource: String, Codable, Sendable, CaseIterable, Identifiable {
     case grok
     case kiroIDE = "kiro-ide"
     case kiroCLI = "kiro-cli"
+    case omp
+    case pi
+    case devin
+
+    public var id: String { rawValue }
 
     public var label: String {
         switch self {
         case .grok: "Grok"
         case .kiroIDE: "Kiro"
         case .kiroCLI: "Kiro CLI"
+        case .omp: "OMP"
+        case .pi: "Pi"
+        case .devin: "Devin"
         }
     }
 }
@@ -124,7 +132,9 @@ public struct SessionRef: Codable, Sendable, Hashable, Identifiable {
 
     public var folderURL: URL {
         let url = URL(fileURLWithPath: locator)
-        if source == .kiroCLI { return url.deletingLastPathComponent() }
+        if url.pathExtension == "json" || url.pathExtension == "jsonl" {
+            return url.deletingLastPathComponent()
+        }
         return url
     }
 }
@@ -249,6 +259,8 @@ public struct SessionDigest: Codable, Sendable, Hashable {
     public var mcp: [NamedBytes]
     public var contextPercent: Double?
     public var contextWindow: Int?
+    /// Provider-recorded prompt tokens from the last model turn, when the log has them.
+    public var promptTokens: Int?
 
     public init(
         id: String,
@@ -258,7 +270,8 @@ public struct SessionDigest: Codable, Sendable, Hashable {
         skills: [NamedBytes],
         mcp: [NamedBytes],
         contextPercent: Double?,
-        contextWindow: Int?
+        contextWindow: Int?,
+        promptTokens: Int? = nil
     ) {
         self.id = id
         self.fingerprint = fingerprint
@@ -268,6 +281,7 @@ public struct SessionDigest: Codable, Sendable, Hashable {
         self.mcp = mcp
         self.contextPercent = contextPercent
         self.contextWindow = contextWindow
+        self.promptTokens = promptTokens
     }
 
     public var standingBytes: Int { standing.reduce(0) { $0 + $1.bytes } }
@@ -286,6 +300,7 @@ public struct SessionReport: Sendable {
     public var steering: [NamedBytes]
     public var contextPercent: Double?
     public var contextWindow: Int?
+    public var promptTokens: Int?
     public var notes: [String]
     public var truncated: Bool
 
@@ -302,6 +317,7 @@ public struct SessionReport: Sendable {
         steering: [NamedBytes],
         contextPercent: Double?,
         contextWindow: Int?,
+        promptTokens: Int? = nil,
         notes: [String],
         truncated: Bool
     ) {
@@ -317,6 +333,7 @@ public struct SessionReport: Sendable {
         self.steering = steering
         self.contextPercent = contextPercent
         self.contextWindow = contextWindow
+        self.promptTokens = promptTokens
         self.notes = notes
         self.truncated = truncated
     }
@@ -341,7 +358,8 @@ public struct SessionReport: Sendable {
                 )
             },
             contextPercent: contextPercent ?? ref.contextPercent,
-            contextWindow: contextWindow
+            contextWindow: contextWindow,
+            promptTokens: promptTokens
         )
     }
 }
@@ -372,6 +390,12 @@ public enum ByteFormat {
         if tokens < 1000 { return "~\(tokens)" }
         if tokens < 1_000_000 { return String(format: "~%.1fk", Double(tokens) / 1000) }
         return String(format: "~%.2fM", Double(tokens) / 1_000_000)
+    }
+
+    public static func exactTokens(_ count: Int) -> String {
+        if count < 1000 { return "\(count)" }
+        if count < 1_000_000 { return String(format: "%.1fk", Double(count) / 1000) }
+        return String(format: "%.2fM", Double(count) / 1_000_000)
     }
 
     public static func percent(_ part: Int, _ whole: Int) -> String {
@@ -437,6 +461,9 @@ public enum ReportText {
             let window = report.contextWindow.map { " / \($0) token" } ?? ""
             lines.append("")
             lines.append(String(format: "Context đã ghi: %.1f%%%@", pct, window))
+        }
+        if let tokens = report.promptTokens {
+            lines.append("Token đầu vào đã ghi: \(tokens)")
         }
         if !report.notes.isEmpty {
             lines.append("")

@@ -1,0 +1,82 @@
+version: '3'
+
+# Thin wrapper over macos/Makefile so there is one source of truth
+# for how things are built. Run `task --list` to see everything.
+# The analyzer lives in the Swift package. There is no Go module.
+
+tasks:
+  default:
+    desc: List tasks
+    cmds:
+      - task --list
+    silent: true
+
+  install:
+    desc: Install the CLI to ~/.local/bin and promptscope.app to /Applications
+    cmds:
+      - task: cli:install
+      - task: app:install
+
+  cli:build:
+    desc: Build the release promptscope CLI
+    dir: macos
+    cmds:
+      - swift build -c release --product promptscope-cli
+
+  cli:install:
+    desc: Install the CLI to ~/.local/bin/promptscope
+    dir: macos
+    cmds:
+      - swift build -c release --product promptscope-cli
+      - |
+        set -eu
+        bin="$(swift build -c release --show-bin-path)/promptscope-cli"
+        mkdir -p "$HOME/.local/bin"
+        cp "$bin" "$HOME/.local/bin/promptscope"
+        chmod 755 "$HOME/.local/bin/promptscope"
+        echo "installed $HOME/.local/bin/promptscope"
+
+  app:build:
+    desc: Build macos/promptscope.app (release, ad-hoc signed)
+    dir: macos
+    cmds:
+      - make
+
+  app:install:
+    desc: Build the macOS app and copy it to /Applications
+    dir: macos
+    cmds:
+      # Replacing a running bundle leaves the old binary in memory.
+      - pkill -x promptscope || true
+      - make install
+
+  app:test:
+    desc: Test the Swift package
+    dir: macos
+    cmds:
+      - swift test
+
+  app:icon:
+    desc: Regenerate macos/Resources/AppIcon.icns from the logo script
+    dir: macos
+    cmds:
+      - make icon
+
+  app:clean:
+    desc: Remove the SwiftPM build and promptscope.app next to the package
+    dir: macos
+    cmds:
+      - make clean
+
+  dev:
+    desc: Build the macOS app in debug and launch it
+    dir: macos
+    cmds:
+      # Only the debug binary. The installed app's executable is named promptscope.
+      - pkill -x promptscope-app || true
+      - swift run promptscope-app
+
+  test:
+    desc: Run the Swift test suite
+    cmds:
+      - task: app:test

@@ -9,14 +9,17 @@ func fail(_ message: String) -> Never {
 }
 
 guard let command = arguments.first else {
-    fail("dùng: promptscope-cli scan | report grok|kiro-ide|kiro-cli <đường dẫn>")
+    fail("dùng: promptscope-cli scan | report grok|kiro-ide|kiro-cli|omp|pi|devin <đường dẫn>")
 }
 
 switch command {
 case "scan":
     let scan = LibraryScanner.scan(
         grokHome: LibraryScanner.defaultGrokHome,
-        kiroHome: LibraryScanner.defaultKiroHome
+        kiroHome: LibraryScanner.defaultKiroHome,
+        ompHome: LibraryScanner.defaultOmpHome,
+        piHome: LibraryScanner.defaultPiHome,
+        devinHome: LibraryScanner.defaultDevinHome
     )
     let counts = Dictionary(grouping: scan.sessions, by: \.source).mapValues(\.count)
     print("sessions \(scan.sessions.count)")
@@ -27,14 +30,17 @@ case "scan":
     for note in scan.notes { print(note) }
 case "report":
     guard arguments.count >= 3 else {
-        fail("dùng: promptscope-cli report grok|kiro-ide|kiro-cli <đường dẫn>")
+        fail("dùng: promptscope-cli report grok|kiro-ide|kiro-cli|omp|pi|devin <đường dẫn>")
     }
     let source: AgentSource
     switch arguments[1] {
     case "grok": source = .grok
     case "kiro-ide": source = .kiroIDE
     case "kiro-cli": source = .kiroCLI
-    default: fail("nguồn phải là grok, kiro-ide, hoặc kiro-cli")
+    case "omp": source = .omp
+    case "pi": source = .pi
+    case "devin": source = .devin
+    default: fail("nguồn phải là grok, kiro-ide, kiro-cli, omp, pi, hoặc devin")
     }
     let path = URL(fileURLWithPath: arguments[2]).standardizedFileURL.path
     let ref = SessionRef(

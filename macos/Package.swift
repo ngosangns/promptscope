@@ -5,7 +5,10 @@ let package = Package(
     name: "promptscope",
     platforms: [.macOS(.v14)],
     targets: [
+        // Pure logic: session models, Grok/Kiro parsers, library scan.
+        // No UI imports, so it is unit-testable and reusable by the CLI.
         .target(name: "PromptscopeKit", path: "Sources/PromptscopeKit"),
+        // SwiftUI app: state (Model), design system (Design), feature views.
         .executableTarget(
             name: "promptscope-app",
             dependencies: ["PromptscopeKit"],
