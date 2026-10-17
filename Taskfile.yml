@@ -80,3 +80,14 @@ tasks:
     desc: Run the Swift test suite
     cmds:
       - task: app:test
+
+  release:build:
+    desc: Test and build the release assets in dist/ (no publish)
+    cmds:
+      - ./scripts/release-local.sh
+
+  release:publish:
+    desc: Test, build and publish the GitHub release for VERSION
+    prompt: This creates or updates a public GitHub release. Continue?
+    cmds:
+      - ./scripts/release-local.sh --publish

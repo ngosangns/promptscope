@@ -36,6 +36,14 @@ Schema từng tool MCP **không** nằm trong prompt. Grok nạp chúng qua `sea
 
 Token ghi `~` là `byte / 4`. Đó không phải tokenizer của model. Với Kiro CLI, nếu sidecar có cửa sổ token thì số đó được ghi riêng.
 
+## Tải
+
+Bản darwin-arm64: <https://github.com/ngosangns/promptscope/releases/latest>
+
+Giải nén `promptscope-vX.Y.Z-darwin-arm64.zip`, rồi mở `promptscope.app`. App ký ad-hoc, chưa notarize. Lần đầu macOS có thể chặn trong System Settings → Privacy & Security → Open Anyway.
+
+`VERSION` phải trùng `CFBundleShortVersionString`. `task release:build` chạy test và ghi `dist/`. `task release:publish` đăng release đó. Đẩy tag `v*` thì GitHub Actions đóng gói cùng asset.
+
 ## Chạy
 
 Từ thư mục repo:

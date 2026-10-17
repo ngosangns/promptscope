@@ -10,7 +10,7 @@ Layout matches `../synca/macos`:
 - `macos/Sources/PromptscopeKit` — models, parsers, library scan. No UI imports. Unit-tested.
 - `macos/Sources/promptscope-cli` — `report` and `scan`.
 - `macos/Sources/promptscope-app` — `App`, `Design`, `Features`, `Model`.
-- `Taskfile.yml` is the entry point: `task app:build`, `task app:test`, `task app:install`, `task dev`, `task app:icon`.
+- `Taskfile.yml` is the entry point: `task app:build`, `task app:test`, `task app:install`, `task dev`, `task app:icon`, `task release:build`, `task release:publish`.
 
 `task app:install` quits a running copy, then `rsync -a --delete`s `macos/promptscope.app` into `/Applications`.
 Launch the built bundle with `open macos/promptscope.app`. `task dev` runs the debug binary the way synca does;
@@ -26,3 +26,4 @@ Launch the built bundle with `open macos/promptscope.app`. `task dev` runs the d
 - Pi stores the standing prompt in `system.sections`. OMP stores only `system-prompt-digest` plus usage (`input`, `contextPercent`, `contextSnapshot.nonMessageTokens`). Devin CLI stores system steps and `tool_definitions` in the ATIF transcript; `prompt_tokens` on the last agent step is the recorded prompt size.
 - The sidebar source list is one row per agent. Do not put them back in a segmented control.
 - Skill names require a path that contains `/skills/` and a real `SKILL.md` segment. `but` is a real GitButler skill, not noise.
+- `VERSION` is the release source of truth and must match `CFBundleShortVersionString`. `task release:build` tests and writes `dist/`. `task release:publish` and a `v*` tag upload the same zip, CLI, and `SHA256SUMS`. Do not commit `dist/` or `*.app`.
