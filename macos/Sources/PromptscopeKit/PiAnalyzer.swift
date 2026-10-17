@@ -52,6 +52,12 @@ private struct Accumulator {
     private var replyBytes = 0
     private var inTurn = false
 
+    // Older Swift marks the memberwise init private when any property is private,
+    // so PiFamilyAnalyzer in this file cannot call it. Keep an explicit init.
+    init(source: AgentSource) {
+        self.source = source
+    }
+
     mutating func consume(_ object: [String: Any]) {
         guard object["type"] as? String == "message" else { return }
         guard let message = object["message"] as? [String: Any] else { return }
