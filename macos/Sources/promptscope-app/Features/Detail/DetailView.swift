@@ -1,5 +1,6 @@
 import PromptscopeKit
 import SwiftUI
+import NSShell
 
 struct SessionDetailView: View {
     @Environment(AppModel.self) private var model

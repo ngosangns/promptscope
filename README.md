@@ -6,7 +6,7 @@ App macOS đo phần nào đang chiếm context của session **Grok** và **Kir
 
 Nó đọc log local. Không gửi session đi đâu.
 
-Phần đo nằm trong `macos/Sources/PromptscopeKit` (không import UI). App SwiftUI ở `macos/Sources/promptscope-app`, tách `App`, `Design`, `Features`, `Model` giống [synca](../synca/macos) và [hearth](../hearth/apps/macos-swiftui).
+Phần đo nằm trong `macos/Sources/PromptscopeKit` (không import UI). App SwiftUI ở `macos/Sources/promptscope-app`, tách `App`, `Design`, `Features`, `Model` giống [synca](../synca/macos) và [hearth](../hearth/apps/macos-swiftui). Cách các lớp phụ thuộc nhau nằm trong [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Promptscope đo gì
 

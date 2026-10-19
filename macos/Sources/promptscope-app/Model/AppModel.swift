@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import PromptscopeKit
+import NSShell
 
 struct SkillTax: Identifiable {
     var id: String { name }

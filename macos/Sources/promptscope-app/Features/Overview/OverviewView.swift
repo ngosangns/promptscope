@@ -1,5 +1,6 @@
 import PromptscopeKit
 import SwiftUI
+import NSShell
 
 struct OverviewView: View {
     @Environment(AppModel.self) private var model

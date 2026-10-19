@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
+import NSShell
 
 @main
 struct PromptscopeApp: App {
     @State private var model = AppModel()
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @NSApplicationDelegateAdaptor(ShellAppDelegate.self) private var delegate
 
     var body: some Scene {
         Window("Promptscope", id: "main") {
@@ -18,32 +19,27 @@ struct PromptscopeApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-}
-
 struct AppCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button("Tổng quan") { model.selectedID = nil }
-                .keyboardShortcut("1", modifiers: .command)
-            Button("Quét lại") { model.reload() }
-                .keyboardShortcut("r")
-            Button("Hiện trong Finder") { model.revealSelected() }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-            Button("Chép phân tích") { model.copyReport() }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
+            command(.overview)
+            command(.reload)
+            command(.reveal)
+            command(.copyReport)
             Divider()
-            Button(model.hideNoise ? "Hiện tạm và subagent" : "Ẩn tạm và subagent") {
-                model.hideNoise.toggle()
-            }
+            command(.toggleNoise)
+        }
+    }
+
+    @ViewBuilder
+    private func command(_ id: PromptscopeCommand) -> some View {
+        if let shortcut = id.shortcut {
+            Button(id.title(model)) { id.run(model) }
+                .keyboardShortcut(shortcut, modifiers: id.modifiers)
+        } else {
+            Button(id.title(model)) { id.run(model) }
         }
     }
 }

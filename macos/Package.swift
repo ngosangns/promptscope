@@ -4,14 +4,18 @@ import PackageDescription
 let package = Package(
     name: "promptscope",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(path: "../../ns-shell"),
+    ],
     targets: [
-        // Pure logic: session models, Grok/Kiro parsers, library scan.
-        // No UI imports, so it is unit-testable and reusable by the CLI.
+        // Parsers and library scan. No UI imports.
+        // Zed: crates/project, shared by the window and the CLI.
         .target(name: "PromptscopeKit", path: "Sources/PromptscopeKit"),
-        // SwiftUI app: state (Model), design system (Design), feature views.
+        // Composition root. App binds PromptscopeCommand. Design is the
+        // component crate. See ../ARCHITECTURE.md.
         .executableTarget(
             name: "promptscope-app",
-            dependencies: ["PromptscopeKit"],
+            dependencies: ["PromptscopeKit", .product(name: "NSShell", package: "ns-shell")],
             path: "Sources/promptscope-app"
         ),
         .executableTarget(

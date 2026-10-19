@@ -5,6 +5,8 @@
 Promptscope is a local macOS app that measures how Grok, Kiro, OMP, Pi, and Devin sessions spend their prompt.
 The analyzer is in-process Swift. There is no Go module and no daemon.
 
+Cách ghép cửa sổ, Kit và CLI nằm trong `ARCHITECTURE.md` (cùng kiểu dựng app với Zed: composition root, shell, lõi không UI).
+
 Layout matches `../synca/macos`:
 
 - `macos/Sources/PromptscopeKit` — models, parsers, library scan. No UI imports. Unit-tested.

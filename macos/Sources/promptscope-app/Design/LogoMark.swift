@@ -1,4 +1,5 @@
 import SwiftUI
+import NSShell
 
 /// Promptscope logo: a white scope on the shared brand-gradient squircle.
 /// `Tools/make-icon.swift` renders the same artwork into `AppIcon.icns`.

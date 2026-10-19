@@ -1,3 +1,4 @@
+import NSShell
 /// Central SF Symbols registry. Views use these names instead of string literals.
 enum Icon {
     static let scope = "scope"
