@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test, build the darwin-arm64 app zip and CLI, and optionally publish them.
+# Test, build the darwin-arm64 CLI, and optionally publish it.
 # Usage:
 #   ./scripts/release-local.sh           # build only
 #   ./scripts/release-local.sh --publish # create/upload the GitHub release for VERSION
@@ -9,47 +9,55 @@ cd "$ROOT"
 
 VER="$(tr -d '[:space:]' < VERSION)"
 [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must be X.Y.Z, got '${VER}'" >&2; exit 1; }
-PLIST_VER="$(plutil -extract CFBundleShortVersionString raw macos/Resources/Info.plist)"
-[[ "$PLIST_VER" == "$VER" ]] || { echo "Info.plist short version ${PLIST_VER} != VERSION ${VER}" >&2; exit 1; }
 if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" != "v${VER}" ]]; then
   echo "tag ${GITHUB_REF_NAME} does not match VERSION ${VER}" >&2
   exit 1
 fi
 
 TAG="v${VER}"
-APP_ASSET="promptscope-v${VER}-darwin-arm64.zip"
-CLI_ASSET="promptscope-cli-v${VER}-darwin-arm64"
+CLI_ASSET="promptscope-v${VER}-darwin-arm64"
 OUTDIR="${ROOT}/dist"
 mkdir -p "$OUTDIR"
 
-echo "Testing (version ${VER})..."
+echo "Testing updater (version ${VER})..."
+(cd go && go vet ./... && go test ./...)
+
+echo "Testing analyzer..."
 (cd macos && swift test)
 
-echo "Building app..."
-(cd macos && make)
-APP="${ROOT}/macos/promptscope.app"
-APP_VER="$(defaults read "${APP}/Contents/Info" CFBundleShortVersionString)"
-[[ "$APP_VER" == "$VER" ]] || { echo "built app version ${APP_VER} != VERSION ${VER}" >&2; exit 1; }
-codesign --verify --strict "${APP}"
-
 echo "Building CLI..."
+MAIN="macos/Sources/promptscope-cli/main.swift"
+original_main="$(mktemp)"
+cp "$MAIN" "$original_main"
+restore_main() { cp "$original_main" "$MAIN"; rm -f "$original_main"; }
+trap restore_main EXIT
+perl -i -pe 's/^let releaseVersion = ".*"$/let releaseVersion = "'"$VER"'"/' "$MAIN"
 (cd macos && swift build -c release --product promptscope-cli)
+restore_main
+trap - EXIT
 CLI_BIN="$(cd macos && swift build -c release --show-bin-path)/promptscope-cli"
 cp "$CLI_BIN" "${OUTDIR}/${CLI_ASSET}"
 chmod +x "${OUTDIR}/${CLI_ASSET}"
-# No command is a usage error (exit 1). A crash or exit 0 means the binary is wrong.
+
+printed="$("${OUTDIR}/${CLI_ASSET}" --version)"
+[[ "$printed" == "promptscope ${VER}" ]] || { echo "CLI printed '${printed}', expected 'promptscope ${VER}'" >&2; exit 1; }
 set +e
 "${OUTDIR}/${CLI_ASSET}" >/dev/null 2>&1
 cli_status=$?
 set -e
 [[ "$cli_status" -eq 1 ]] || { echo "CLI exit ${cli_status}, expected 1 for a missing command" >&2; exit 1; }
 
-ditto -c -k --keepParent "$APP" "${OUTDIR}/${APP_ASSET}"
+echo "Building updater..."
+UPDATER_ASSET="promptscope-update-v${VER}-darwin-arm64"
+(cd go && go build -trimpath -ldflags "-s -w -X main.version=${VER}" -o "${OUTDIR}/${UPDATER_ASSET}" ./cmd/promptscope)
+chmod +x "${OUTDIR}/${UPDATER_ASSET}"
+printed_updater="$("${OUTDIR}/${UPDATER_ASSET}" --version)"
+[[ "$printed_updater" == "promptscope ${VER}" ]] || { echo "updater printed '${printed_updater}'" >&2; exit 1; }
+
 (
   cd "$OUTDIR"
-  shasum -a 256 "$APP_ASSET" "$CLI_ASSET" > SHA256SUMS
+  shasum -a 256 "$CLI_ASSET" "$UPDATER_ASSET" > SHA256SUMS
 )
-echo "Wrote ${OUTDIR}/${APP_ASSET}"
 echo "Wrote ${OUTDIR}/${CLI_ASSET}"
 cat "${OUTDIR}/SHA256SUMS"
 
@@ -57,26 +65,26 @@ NOTES_FILE="$(mktemp)"
 cat > "$NOTES_FILE" <<NOTES
 Promptscope ${TAG}
 
-App macOS đo prompt của session Grok, Kiro, OMP, Pi và Devin trên máy này. Không gửi session đi đâu.
-
-## Cài app
-
-Tải \`${APP_ASSET}\`, giải nén, rồi mở \`promptscope.app\`.
-Bản này ký ad-hoc, chưa notarize. Lần đầu macOS có thể chặn: System Settings → Privacy & Security → Open Anyway.
+CLI đo prompt của session Grok, Kiro, OMP, Pi, Devin và DSH trên máy này. Không gửi session đi đâu.
 
 ## CLI
 
 \`\`\`bash
-curl -fsSL -o promptscope "https://github.com/ngosangns/promptscope/releases/download/${TAG}/${CLI_ASSET}"
-chmod +x promptscope
-mkdir -p ~/.local/bin
-mv promptscope ~/.local/bin/promptscope
+mkdir -p ~/.local/share/promptscope/bin ~/.local/bin
+curl -fsSL -o ~/.local/share/promptscope/bin/promptscope-${VER} \\
+  "https://github.com/ngosangns/promptscope/releases/download/${TAG}/${CLI_ASSET}"
+curl -fsSL -o ~/.local/share/promptscope/bin/promptscope-update-${VER} \\
+  "https://github.com/ngosangns/promptscope/releases/download/${TAG}/promptscope-update-v${VER}-darwin-arm64"
+chmod 755 ~/.local/share/promptscope/bin/promptscope-${VER} ~/.local/share/promptscope/bin/promptscope-update-${VER}
+ln -sfn ../share/promptscope/bin/promptscope-${VER} ~/.local/bin/promptscope
 \`\`\`
+
+Sau lần cài đầu, \`promptscope update\` tải cả hai asset, kiểm digest GitHub, rồi đổi symlink. Bản đang chạy giữ inode cũ đến khi mở lại lệnh.
 
 ## Asset
 
-- App: \`${APP_ASSET}\`
 - CLI: \`${CLI_ASSET}\`
+- Updater: \`promptscope-update-v${VER}-darwin-arm64\`
 - Checksum: \`SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\`)
 NOTES
 
@@ -84,16 +92,16 @@ if [[ "${1:-}" == "--publish" ]]; then
   if gh release view "$TAG" >/dev/null 2>&1; then
     echo "Release ${TAG} exists; uploading assets..."
     gh release upload "$TAG" \
-      "${OUTDIR}/${APP_ASSET}" \
       "${OUTDIR}/${CLI_ASSET}" \
+      "${OUTDIR}/promptscope-update-v${VER}-darwin-arm64" \
       "${OUTDIR}/SHA256SUMS" \
       --clobber
     gh release edit "$TAG" --notes-file "$NOTES_FILE" || true
   else
     echo "Creating release ${TAG}..."
     gh release create "$TAG" \
-      "${OUTDIR}/${APP_ASSET}" \
       "${OUTDIR}/${CLI_ASSET}" \
+      "${OUTDIR}/promptscope-update-v${VER}-darwin-arm64" \
       "${OUTDIR}/SHA256SUMS" \
       --target "$(git rev-parse HEAD)" \
       --title "promptscope ${TAG}" \

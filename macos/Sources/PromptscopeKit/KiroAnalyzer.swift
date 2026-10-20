@@ -13,6 +13,7 @@ enum KiroIDEAnalyzer {
         var skills: [String: SkillMeasure] = [:]
         var steering: [NamedBytes] = []
         var turns: [TurnMeasure] = []
+        var trajectory: [TrajectoryEntry] = []
         var heavy: [(String, Int)] = []
         var contextPercent: Double?
         var credits = 0.0
@@ -39,6 +40,10 @@ enum KiroIDEAnalyzer {
                     turns[index] = TurnMeasure(index: index + 1, preview: turns[index].preview, userBytes: turnUser, replyBytes: turnReply)
                 }
                 turns.append(TurnMeasure(index: turns.count + 1, preview: PromptText.preview(text), userBytes: text.utf8.count, replyBytes: 0))
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: turns.count,
+                    kind: "user", label: PromptText.preview(text), bytes: text.utf8.count
+                ))
                 turnUser = text.utf8.count
                 turnReply = 0
                 sawTurn = true
@@ -46,6 +51,10 @@ enum KiroIDEAnalyzer {
                 let text = payload["content"] as? String ?? ""
                 add(.assistant, text.utf8.count)
                 turnReply += text.utf8.count
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: max(turns.count, 1),
+                    kind: "assistant", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
+                ))
             case "tool_call":
                 let name = payload["toolName"] as? String ?? "tool"
                 let id = payload["toolCallId"] as? String ?? ""
@@ -54,6 +63,10 @@ enum KiroIDEAnalyzer {
                 add(.other, args.utf8.count)
                 bumpTool(&tools, name: name, call: true, result: 0)
                 absorbSkills(args, into: &skills)
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: max(turns.count, 1),
+                    kind: "tool", label: name, bytes: args.utf8.count
+                ))
             case "tool_result":
                 let text = payload["content"] as? String ?? jsonText(payload["content"])
                 let bytes = text.utf8.count
@@ -63,6 +76,10 @@ enum KiroIDEAnalyzer {
                 let name = callNames[id] ?? "tool"
                 bumpTool(&tools, name: name, call: false, result: bytes)
                 considerHeavy(&heavy, tool: name, bytes: bytes)
+                if let index = trajectory.lastIndex(where: { $0.kind == "tool" && $0.label == name && $0.durationMs == nil }),
+                   let start = trajectory[index].at, let end = kiroMillis(object["timestamp"]), end >= start {
+                    trajectory[index].durationMs = end - start
+                }
             case "steering_inclusion":
                 let docs = payload["documents"] as? [String] ?? []
                 steering = docs.map { doc in
@@ -109,6 +126,7 @@ enum KiroIDEAnalyzer {
             mcp: [],
             tools: tools.values.sorted { $0.resultBytes > $1.resultBytes },
             turns: turns,
+            trajectory: trajectory,
             heavy: heavy.enumerated().map { HeavyResult(rank: $0.offset + 1, tool: $0.element.0, bytes: $0.element.1) },
             steering: steering,
             contextPercent: contextPercent ?? ref.contextPercent,
@@ -141,6 +159,7 @@ enum KiroCLIAnalyzer {
         var callNames: [String: String] = [:]
         var skills: [String: SkillMeasure] = [:]
         var turns: [TurnMeasure] = []
+        var trajectory: [TrajectoryEntry] = []
         var heavy: [(String, Int)] = []
         var turnReply = 0
 
@@ -158,6 +177,9 @@ enum KiroCLIAnalyzer {
                 let text = partText(data["content"])
                 add(.user, text.utf8.count)
                 turns.append(TurnMeasure(index: turns.count + 1, preview: PromptText.preview(text), userBytes: text.utf8.count, replyBytes: 0))
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: nil, turn: turns.count, kind: "user", label: PromptText.preview(text), bytes: text.utf8.count
+                ))
                 turnReply = 0
             case "AssistantMessage":
                 guard let parts = data["content"] as? [[String: Any]] else { break }
@@ -178,6 +200,9 @@ enum KiroCLIAnalyzer {
                         add(.other, args.utf8.count)
                         bumpTool(&tools, name: name, call: true, result: 0)
                         absorbSkills(args, into: &skills)
+                        trajectory.append(TrajectoryEntry(
+                            index: trajectory.count, at: nil, turn: max(turns.count, 1), kind: "tool", label: name, bytes: args.utf8.count
+                        ))
                     }
                 }
             case "ToolResults":
@@ -211,6 +236,7 @@ enum KiroCLIAnalyzer {
             mcp: [],
             tools: tools.values.sorted { $0.resultBytes > $1.resultBytes },
             turns: turns,
+            trajectory: trajectory,
             heavy: heavy.enumerated().map { HeavyResult(rank: $0.offset + 1, tool: $0.element.0, bytes: $0.element.1) },
             steering: [],
             contextPercent: contextPercent,
@@ -319,6 +345,11 @@ private func considerHeavy(_ heavy: inout [(String, Int)], tool: String, bytes: 
 
 private func compact(_ slices: [Slice]) -> [Slice] {
     slices.filter { $0.bytes > 0 }
+}
+
+private func kiroMillis(_ value: Any?) -> Int? {
+    guard let text = value as? String, let date = Dates.parse(text) else { return nil }
+    return Int(date.timeIntervalSince1970 * 1000)
 }
 
 private func number(_ value: Any?) -> Double? {

@@ -2,21 +2,16 @@
 
 ## Orientation
 
-Promptscope is a local macOS app that measures how Grok, Kiro, OMP, Pi, and Devin sessions spend their prompt.
-The analyzer is in-process Swift. There is no Go module and no daemon.
+Promptscope measures how Grok, Kiro, OMP, Pi, Devin, and DSH sessions spend their prompt.
+The analyzer is in-process Swift. `go/` is only the self-updater. There is no daemon.
+The window is `promptscope-gpui` in the sibling repo `ns-gpui`. This repo has no UI.
 
-Cách ghép cửa sổ, Kit và CLI nằm trong `ARCHITECTURE.md` (cùng kiểu dựng app với Zed: composition root, shell, lõi không UI).
-
-Layout matches `../synca/macos`:
+Cách ghép Kit và CLI nằm trong `ARCHITECTURE.md`.
 
 - `macos/Sources/PromptscopeKit` — models, parsers, library scan. No UI imports. Unit-tested.
-- `macos/Sources/promptscope-cli` — `report` and `scan`.
-- `macos/Sources/promptscope-app` — `App`, `Design`, `Features`, `Model`.
-- `Taskfile.yml` is the entry point: `task app:build`, `task app:test`, `task app:install`, `task dev`, `task app:icon`, `task release:build`, `task release:publish`.
-
-`task app:install` quits a running copy, then `rsync -a --delete`s `macos/promptscope.app` into `/Applications`.
-Launch the built bundle with `open macos/promptscope.app`. `task dev` runs the debug binary the way synca does;
-`AppDelegate` sets the regular activation policy so that binary gets a window.
+- `macos/Sources/promptscope-cli` — `report`, `scan`, and `update` (execs the Go updater).
+- `go/cmd/promptscope` — `promptscope update` only. Scan and report stay in Swift.
+- `Taskfile.yml` is the entry point: `task test`, `task cli:install`, `task release:build`, `task release:publish`.
 
 ## Sharp edges
 
@@ -26,6 +21,7 @@ Launch the built bundle with `open macos/promptscope.app`. `task dev` runs the d
 - Standing skills, MCP, and rules are last-wins. Transcript bytes sum every copy. The system chat line duplicates `system_prompt.txt`; standing uses the file size.
 - Empty Kiro CLI transcripts are skipped. `/tmp` and subagent sessions are hidden by default. Nested OMP/Pi jsonl files are subagents.
 - Pi stores the standing prompt in `system.sections`. OMP stores only `system-prompt-digest` plus usage (`input`, `contextPercent`, `contextSnapshot.nonMessageTokens`). Devin CLI stores system steps and `tool_definitions` in the ATIF transcript; `prompt_tokens` on the last agent step is the recorded prompt size.
-- The sidebar source list is one row per agent. Do not put them back in a segmented control.
+- DSH stores `session.v4.jsonl`, often `.zstd`, under `~/.dsh/sessions`. Only v4 is read. The standing prompt is the rendered `system/message` plus role-tagged `user/message` rows. `delegationDepth > 0` is a subagent. `inputTokens` on the last assistant message is the recorded prompt size. The catalog has no `SKILL.md` path, so disk size and read count stay empty.
 - Skill names require a path that contains `/skills/` and a real `SKILL.md` segment. `but` is a real GitButler skill, not noise.
-- `VERSION` is the release source of truth and must match `CFBundleShortVersionString`. `task release:build` tests and writes `dist/`. `task release:publish` and a `v*` tag upload the same zip, CLI, and `SHA256SUMS`. Do not commit `dist/` or `*.app`.
+- `VERSION` is the release source of truth. `task release:build` tests and writes `dist/`. `task release:publish` and a `v*` tag upload the CLI, the updater, and `SHA256SUMS`. Do not commit `dist/`.
+- `promptscope update` is the Go binary next to the versioned CLI (`promptscope-update-X.Y.Z`). It refuses a binary that is not that install, refuses a downgrade, and checks the GitHub asset digest before swapping the symlink. The Swift CLI's `--version` line is `promptscope X.Y.Z`; the release script stamps `releaseVersion` from `VERSION` for that build and restores the source.

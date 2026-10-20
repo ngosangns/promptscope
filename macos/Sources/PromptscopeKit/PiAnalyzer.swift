@@ -39,6 +39,7 @@ private struct Accumulator {
     var tools: [String: ToolMeasure] = [:]
     var steering: [NamedBytes] = []
     var turns: [TurnMeasure] = []
+    var trajectory: [TrajectoryEntry] = []
     var heavy: [(tool: String, bytes: Int)] = []
     var contextPercent: Double?
     var contextWindow: Int?
@@ -72,6 +73,10 @@ private struct Accumulator {
             let text = contentText(message["content"])
             turnIndex += 1
             turnPreview = PromptText.preview(text, limit: 140)
+            trajectory.append(TrajectoryEntry(
+                index: trajectory.count, at: piMillis(object["timestamp"]), turn: turnIndex,
+                kind: "user", label: turnPreview, bytes: text.utf8.count
+            ))
             userBytes = text.utf8.count
             replyBytes = 0
             inTurn = true
@@ -84,6 +89,16 @@ private struct Accumulator {
             add(.toolResult, text.utf8.count, standing: false)
             noteTool(name, call: false, result: text.utf8.count)
             heavy.append((name, text.utf8.count))
+            let at = piMillis(message["timestamp"]) ?? piMillis(object["timestamp"])
+            if let index = trajectory.lastIndex(where: { $0.kind == "tool" && $0.label == name && $0.durationMs == nil }),
+               let start = trajectory[index].at, let at, at >= start {
+                trajectory[index].durationMs = at - start
+                trajectory[index].bytes += text.utf8.count
+            } else {
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: at, turn: turnIndex, kind: "tool", label: name, bytes: text.utf8.count
+                ))
+            }
             replyBytes += text.utf8.count
         default:
             let text = contentText(message["content"])
@@ -136,6 +151,7 @@ private struct Accumulator {
             mcp: mcp,
             tools: tools.values.sorted { $0.calls > $1.calls },
             turns: turns,
+            trajectory: trajectory,
             heavy: heavyRanked,
             steering: steering,
             contextPercent: contextPercent,
@@ -201,11 +217,22 @@ private struct Accumulator {
                 let args = argumentText(item["arguments"])
                 noteTool(name, call: true, result: 0)
                 noteSkillUse(name: name, arguments: item["arguments"], text: args)
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: piMillis(message["timestamp"]), turn: turnIndex,
+                    kind: "tool", label: name, bytes: args.utf8.count
+                ))
             default:
                 break
             }
         }
         noteUsage(message)
+        let text = contentText(message["content"])
+        if !text.isEmpty {
+            trajectory.append(TrajectoryEntry(
+                index: trajectory.count, at: piMillis(message["timestamp"]), turn: turnIndex,
+                kind: "assistant", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
+            ))
+        }
     }
 
     private mutating func noteUsage(_ message: [String: Any]) {
@@ -400,6 +427,11 @@ private func argumentText(_ arguments: Any?) -> String {
     guard let arguments, JSONSerialization.isValidJSONObject(arguments),
           let data = try? JSONSerialization.data(withJSONObject: arguments) else { return "" }
     return PromptText.normalizeSlashes(String(decoding: data, as: UTF8.self))
+}
+
+private func piMillis(_ value: Any?) -> Int? {
+    guard let text = value as? String, let date = Dates.parse(text) else { return nil }
+    return Int(date.timeIntervalSince1970 * 1000)
 }
 
 private func jsonInt(_ value: Any?) -> Int? {

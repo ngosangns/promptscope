@@ -129,7 +129,8 @@ final class AnalyzerTests: XCTestCase {
             kiroHome: root,
             ompHome: missing,
             piHome: missing,
-            devinHome: missing
+            devinHome: missing,
+            dshHome: missing
         )
         _ = scan
         let ref = SessionRef(
@@ -266,7 +267,8 @@ final class AnalyzerTests: XCTestCase {
             kiroHome: kiroHome,
             ompHome: missing,
             piHome: missing,
-            devinHome: missing
+            devinHome: missing,
+            dshHome: missing
         )
         XCTAssertEqual(scan.skippedEmptyCLI, 1)
         let byID = Dictionary(uniqueKeysWithValues: scan.sessions.map { ($0.sessionID, $0) })
@@ -417,12 +419,100 @@ final class AnalyzerTests: XCTestCase {
             ],
         ], devinDir.appendingPathComponent("calm-session.json"))
 
+        let dshDir = root.appendingPathComponent(
+            "dsh/sessions/--Users-me-app--/session-dsh-1", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: dshDir, withIntermediateDirectories: true)
+        try writeJSONLines([
+            [
+                "type": "session", "version": 4, "id": "session-dsh-1",
+                "createdAt": 1_792_474_601_407.0, "cwd": "/Users/me/app",
+                "delegationDepth": 0, "agentPreset": "standard",
+            ],
+            ["type": "turn/start", "time": 1_792_477_539_414.0, "data": ["turn": 1]],
+            ["type": "system/message", "data": ["message": [
+                "role": "system", "content": [["type": "text", "text": "You are an AI agent powered by DeepSeek Harness."]],
+            ]]],
+            ["type": "user/message", "time": 1_792_477_539_468.0, "data": [
+                "content": [["type": "text", "text": "đo session này"]],
+                "source": ["kind": "user"], "role": "user",
+            ]],
+            ["type": "user/message", "data": [
+                "content": [["type": "text", "text": "Follow AGENTS.md."]],
+                "source": ["kind": "agent-instructions", "form": "instructions"], "role": "user",
+            ]],
+            ["type": "user/message", "data": [
+                "content": [["type": "text", "text": """
+                <available_skills>
+                - `alpha-skill`: Reads the repo.
+                - `daily-report`: Writes the report.
+                </available_skills>
+                """]],
+                "source": ["kind": "skill-catalog", "form": "catalog"], "role": "user",
+            ]],
+            ["type": "user/message", "data": [
+                "content": [["type": "text", "text": "Current working directory: /Users/me/app"]],
+                "source": ["kind": "runtime-context", "form": "snapshot"], "role": "user",
+            ]],
+            ["type": "request/header", "data": ["header": [
+                "config": ["provider": "grok", "model": "grok-4.7"],
+                "tools": [
+                    ["name": "bash", "description": "Run a command"],
+                    ["name": "mcp__context7__resolve", "description": "Resolve a library"],
+                    ["name": "mcp__context7__query", "description": "Query docs"],
+                ],
+            ], "reason": "initial"]],
+            ["type": "request/context", "data": [
+                "provider": "grok", "model": "grok-4.7", "contextWindow": 500_000,
+            ]],
+            ["type": "tool/call", "time": 1_792_477_540_000.0, "data": [
+                "callId": "c1", "name": "bash", "arguments": "{\"command\":\"ls\"}",
+            ]],
+            ["type": "tool/result", "time": 1_792_477_541_000.0, "data": ["message": [
+                "toolCallId": "c1", "content": [["type": "text", "text": "Cargo.toml"]], "isError": false,
+            ]]],
+            ["type": "assistant/message", "time": 1_792_477_542_037.0, "data": [
+                "message": ["content": [
+                    ["type": "reasoning", "text": "đang đo"],
+                    ["type": "text", "text": "xong"],
+                ]],
+                "usage": ["inputTokens": 21_206, "outputTokens": 68],
+            ]],
+            ["type": "compaction/prune", "data": ["shadowedTokenCount": 120]],
+            ["type": "turn/end", "data": ["turn": 1]],
+        ], dshDir.appendingPathComponent("session.v4.jsonl"))
+        let dshChild = root.appendingPathComponent(
+            "dsh/sessions/--Users-me-app--/session-dsh-child", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: dshChild, withIntermediateDirectories: true)
+        try writeJSONLines([
+            [
+                "type": "session", "version": 4, "id": "session-dsh-child",
+                "createdAt": 1_792_474_701_407.0, "cwd": "/tmp/job",
+                "delegationDepth": 1, "agentPreset": "standard",
+            ],
+            ["type": "turn/start", "data": ["turn": 1]],
+            ["type": "user/message", "data": [
+                "content": [["type": "text", "text": "việc con"]],
+                "source": ["kind": "user"], "role": "user",
+            ]],
+        ], dshChild.appendingPathComponent("session.v4.jsonl"))
+        let dshOld = root.appendingPathComponent(
+            "dsh/sessions/--Users-me-app--/session-dsh-old", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: dshOld, withIntermediateDirectories: true)
+        try writeJSONLines([
+            ["type": "session", "version": 3, "id": "session-dsh-old", "cwd": "/Users/me/app"],
+            ["type": "turn/start", "data": ["turn": 1]],
+        ], dshOld.appendingPathComponent("session.v3.jsonl"))
+
         let missing = root.appendingPathComponent("missing")
         let scan = LibraryScanner.scan(
             grokHome: missing, kiroHome: missing,
             ompHome: root.appendingPathComponent("omp"),
             piHome: root.appendingPathComponent("pi"),
-            devinHome: root.appendingPathComponent("devin")
+            devinHome: root.appendingPathComponent("devin"),
+            dshHome: root.appendingPathComponent("dsh")
         )
         let byID = Dictionary(uniqueKeysWithValues: scan.sessions.map { ($0.sessionID, $0) })
         XCTAssertEqual(byID["pi-1"]?.source, .pi)
@@ -472,6 +562,39 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.calls, 1)
         XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.resultBytes, "skill body".utf8.count)
         XCTAssertEqual(devinReport.turns.first?.preview, "dùng skill alpha")
+
+        XCTAssertEqual(byID["session-dsh-1"]?.source, .dsh)
+        XCTAssertEqual(byID["session-dsh-1"]?.cwd, "/Users/me/app")
+        XCTAssertEqual(byID["session-dsh-1"]?.model, "grok-4.7")
+        XCTAssertEqual(byID["session-dsh-1"]?.title, "đo session này")
+        XCTAssertEqual(byID["session-dsh-1"]?.isSubagent, false)
+        XCTAssertEqual(byID["session-dsh-child"]?.isSubagent, true)
+        XCTAssertEqual(byID["session-dsh-child"]?.isTemporary, true)
+        XCTAssertNil(byID["session-dsh-old"])
+
+        let dshReport = SessionAnalyzer.report(for: byID["session-dsh-1"]!)
+        XCTAssertEqual(dshReport.skills.map(\.name), ["alpha-skill", "daily-report"])
+        XCTAssertEqual(dshReport.skills.first?.readCount, 0)
+        XCTAssertNil(dshReport.skills.first?.diskBytes)
+        XCTAssertEqual(dshReport.mcp.first?.name, "context7")
+        XCTAssertEqual(dshReport.mcp.first?.tools, ["query", "resolve"])
+        XCTAssertEqual(dshReport.promptTokens, 21_206)
+        XCTAssertEqual(dshReport.contextWindow, 500_000)
+        XCTAssertGreaterThan(dshReport.standing.first { $0.kind == .system }?.bytes ?? 0, 0)
+        XCTAssertGreaterThan(dshReport.standing.first { $0.kind == .rules }?.bytes ?? 0, 0)
+        XCTAssertGreaterThan(dshReport.standing.first { $0.kind == .skills }?.bytes ?? 0, 0)
+        XCTAssertGreaterThan(dshReport.standing.first { $0.kind == .toolDefs }?.bytes ?? 0, 0)
+        XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.calls, 1)
+        XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.resultBytes, "Cargo.toml".utf8.count)
+        XCTAssertEqual(dshReport.turns.first?.preview, "đo session này")
+        XCTAssertEqual(dshReport.trajectory.map(\.kind), ["user", "tool", "assistant"])
+        XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.label, "bash")
+        XCTAssertNotNil(dshReport.trajectory.first?.at)
+        XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.durationMs, 1000)
+        XCTAssertEqual(dshReport.transcript.first { $0.kind == .reasoning }?.bytes, "đang đo".utf8.count)
+        XCTAssertTrue(dshReport.notes.contains { $0.contains("120") })
+        let dshDigest = SessionAnalyzer.digest(for: byID["session-dsh-1"]!)
+        XCTAssertEqual(dshDigest.promptTokens, 21_206)
     }
 
     private func makeTemp() throws -> URL {

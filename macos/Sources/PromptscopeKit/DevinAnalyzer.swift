@@ -20,6 +20,7 @@ enum DevinAnalyzer {
         var tools: [String: ToolMeasure] = [:]
         var heavy: [(String, Int)] = []
         var turns: [TurnMeasure] = []
+        var trajectory: [TrajectoryEntry] = []
         var rulesBytes = 0
         var summaryBytes = 0
         var promptTokens: Int?
@@ -76,6 +77,10 @@ enum DevinAnalyzer {
                 if inTurn { closeTurn(preview: openPreview) }
                 turnIndex += 1
                 openPreview = PromptText.preview(message, limit: 140)
+                trajectory.append(TrajectoryEntry(
+                    index: trajectory.count, at: devinMillis(step["timestamp"]), turn: turnIndex,
+                    kind: "user", label: openPreview, bytes: message.utf8.count
+                ))
                 userBytes = message.utf8.count
                 replyBytes = 0
                 inTurn = true
@@ -85,6 +90,12 @@ enum DevinAnalyzer {
                 let reasoning = step["reasoning_content"] as? String ?? ""
                 transcript[.reasoning, default: 0] += reasoning.utf8.count
                 replyBytes += message.utf8.count + reasoning.utf8.count
+                if !message.isEmpty {
+                    trajectory.append(TrajectoryEntry(
+                        index: trajectory.count, at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1),
+                        kind: "assistant", label: PromptText.preview(message, limit: 80), bytes: message.utf8.count
+                    ))
+                }
                 if let metrics = step["metrics"] as? [String: Any], let tokens = jsonInt(metrics["prompt_tokens"]) {
                     promptTokens = tokens
                 }
@@ -109,6 +120,10 @@ enum DevinAnalyzer {
                     transcript[.toolResult, default: 0] += result
                     replyBytes += result
                     if result > 0 { heavy.append((name, result)) }
+                    trajectory.append(TrajectoryEntry(
+                        index: trajectory.count, at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1),
+                        kind: "tool", label: name, bytes: result
+                    ))
                     noteSkill(call, name: name, skills: &skills)
                 }
             default:
@@ -136,6 +151,7 @@ enum DevinAnalyzer {
             mcp: mcp,
             tools: tools.values.sorted { $0.calls > $1.calls },
             turns: turns,
+            trajectory: trajectory,
             heavy: ranked,
             steering: [],
             contextPercent: nil,
@@ -266,6 +282,11 @@ private func pack(_ map: [SliceKind: Int]) -> [Slice] {
         guard let bytes = map[kind], bytes > 0 else { return nil }
         return Slice(kind: kind, bytes: bytes)
     }
+}
+
+private func devinMillis(_ value: Any?) -> Int? {
+    guard let text = value as? String, let date = Dates.parse(text) else { return nil }
+    return Int(date.timeIntervalSince1970 * 1000)
 }
 
 private func jsonInt(_ value: Any?) -> Int? {

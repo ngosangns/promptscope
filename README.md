@@ -2,11 +2,11 @@
 
 # Promptscope
 
-App macOS đo phần nào đang chiếm context của session **Grok** và **Kiro** trên máy này.
+Đo phần nào đang chiếm context của session **Grok**, **Kiro**, **OMP**, **Pi**, **Devin** và **DSH** trên máy này.
 
 Nó đọc log local. Không gửi session đi đâu.
 
-Phần đo nằm trong `macos/Sources/PromptscopeKit` (không import UI). App SwiftUI ở `macos/Sources/promptscope-app`, tách `App`, `Design`, `Features`, `Model` giống [synca](../synca/macos) và [hearth](../hearth/apps/macos-swiftui). Cách các lớp phụ thuộc nhau nằm trong [ARCHITECTURE.md](ARCHITECTURE.md).
+Phần đo nằm trong `macos/Sources/PromptscopeKit`. CLI là `macos/Sources/promptscope-cli`. Cửa sổ là `promptscope-gpui` trong repo anh em `ns-gpui`. Cách các lớp phụ thuộc nhau nằm trong [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Promptscope đo gì
 
@@ -34,27 +34,35 @@ Schema từng tool MCP **không** nằm trong prompt. Grok nạp chúng qua `sea
 
 **Devin CLI** (`~/.local/share/devin/cli/transcripts`) ghi system step: identity, catalog MCP, `<available_skills>`, luật, và `tool_definitions`. `prompt_tokens` của lượt agent cuối là token đầu vào.
 
+**DSH** (`~/.dsh/sessions`) ghi một log append-only `session.v4.jsonl`, thường nén `.zstd`. Prompt đứng là `system/message` đã render, cộng các `user/message` phân vai: luật, catalog skill, snapshot runtime. Schema tool nằm trong `request/header` mới nhất. `inputTokens` của lượt assistant cuối là token đầu vào. Chỉ đọc v4. Session không có turn, và session có `delegationDepth` lớn hơn 0, bị bỏ qua hoặc đánh dấu subagent.
+
 Token ghi `~` là `byte / 4`. Đó không phải tokenizer của model. Với Kiro CLI, nếu sidecar có cửa sổ token thì số đó được ghi riêng.
 
 ## Tải
 
 Bản darwin-arm64: <https://github.com/ngosangns/promptscope/releases/latest>
 
-Giải nén `promptscope-vX.Y.Z-darwin-arm64.zip`, rồi mở `promptscope.app`. App ký ad-hoc, chưa notarize. Lần đầu macOS có thể chặn trong System Settings → Privacy & Security → Open Anyway.
+`task release:build` chạy test và ghi CLI vào `dist/`. `task release:publish` đăng release đó. Đẩy tag `v*` thì GitHub Actions đóng gói cùng asset.
 
-`VERSION` phải trùng `CFBundleShortVersionString`. `task release:build` chạy test và ghi `dist/`. `task release:publish` đăng release đó. Đẩy tag `v*` thì GitHub Actions đóng gói cùng asset.
+Lần cài đầu đặt binary vào `~/.local/share/promptscope/bin/promptscope-X.Y.Z` và trỏ `~/.local/bin/promptscope` tới đó. Cạnh nó là `promptscope-update-X.Y.Z`. Sau đó:
+
+```bash
+promptscope update --check
+promptscope update
+```
+
+`promptscope update` chỉ thay symlink do lần cài đó tạo. Nó kiểm digest `sha256` GitHub của cả CLI và updater, chạy `--version` trên bản mới, rồi đổi tên file vào chỗ. Không ghi đè inode đang chạy. Không hạ version, trừ `--force` khi bằng version hiện tại.
 
 ## Chạy
 
 Từ thư mục repo:
 
 ```bash
-task app:test
-task app:build
-open macos/promptscope.app
+task test
+task cli:install
 ```
 
-`task dev` chạy bản debug. `task app:install` tắt bản đang mở rồi chép vào `/Applications`. `task --list` liệt kê mọi lệnh.
+`task --list` liệt kê mọi lệnh.
 
 In một session ra terminal, từ `macos/`:
 
@@ -65,11 +73,12 @@ swift run promptscope-cli report kiro-cli ~/.kiro/sessions/cli/<id>.json
 swift run promptscope-cli report omp ~/.omp/agent/sessions/<cwd>/<id>.jsonl
 swift run promptscope-cli report pi ~/.pi/agent/sessions/<cwd>/<id>.jsonl
 swift run promptscope-cli report devin ~/.local/share/devin/cli/transcripts/<id>.json
+swift run promptscope-cli report dsh ~/.dsh/sessions/<cwd>/<id>/session.v4.jsonl.zstd
 swift run promptscope-cli scan
 ```
 
-`task cli:install` chép CLI release vào `~/.local/bin/promptscope`.
+`task cli:install` đặt CLI release vào `~/.local/share/promptscope/bin/` và trỏ `~/.local/bin/promptscope` tới đó.
 
 Lần quét đầu đọc prefix của từng session Grok (system prompt, catalog skill, MCP) và cache vào `~/Library/Application Support/Promptscope/digests.json`. Mở một phiên thì đọc full transcript của phiên đó.
 
-Mặc định ẩn session trong `/tmp` và subagent. Bật lại bằng checkbox ở sidebar.
+Mặc định ẩn session trong `/tmp` và subagent.

@@ -7,6 +7,7 @@ public enum AgentSource: String, Codable, Sendable, CaseIterable, Identifiable {
     case omp
     case pi
     case devin
+    case dsh
 
     public var id: String { rawValue }
 
@@ -18,6 +19,7 @@ public enum AgentSource: String, Codable, Sendable, CaseIterable, Identifiable {
         case .omp: "OMP"
         case .pi: "Pi"
         case .devin: "Devin"
+        case .dsh: "DSH"
         }
     }
 }
@@ -222,6 +224,29 @@ public struct SectionMeasure: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+public struct TrajectoryEntry: Codable, Sendable, Hashable, Identifiable {
+    public var id: Int { index }
+    public var index: Int
+    /// Wall clock in milliseconds when the log has one.
+    public var at: Int?
+    public var turn: Int
+    public var kind: String
+    public var label: String
+    public var bytes: Int
+    /// Duration in milliseconds, when the log records one.
+    public var durationMs: Int?
+
+    public init(index: Int, at: Int?, turn: Int, kind: String, label: String, bytes: Int, durationMs: Int? = nil) {
+        self.index = index
+        self.at = at
+        self.turn = turn
+        self.kind = kind
+        self.label = label
+        self.bytes = bytes
+        self.durationMs = durationMs
+    }
+}
+
 public struct TurnMeasure: Codable, Sendable, Hashable, Identifiable {
     public var id: Int { index }
     public var index: Int
@@ -296,6 +321,7 @@ public struct SessionReport: Sendable {
     public var mcp: [McpMeasure]
     public var tools: [ToolMeasure]
     public var turns: [TurnMeasure]
+    public var trajectory: [TrajectoryEntry]
     public var heavy: [HeavyResult]
     public var steering: [NamedBytes]
     public var contextPercent: Double?
@@ -313,6 +339,7 @@ public struct SessionReport: Sendable {
         mcp: [McpMeasure],
         tools: [ToolMeasure],
         turns: [TurnMeasure],
+        trajectory: [TrajectoryEntry] = [],
         heavy: [HeavyResult],
         steering: [NamedBytes],
         contextPercent: Double?,
@@ -329,6 +356,7 @@ public struct SessionReport: Sendable {
         self.mcp = mcp
         self.tools = tools
         self.turns = turns
+        self.trajectory = trajectory
         self.heavy = heavy
         self.steering = steering
         self.contextPercent = contextPercent
@@ -416,23 +444,23 @@ public enum ReportText {
         if let agent = ref.agent { meta.append(agent) }
         if !meta.isEmpty { lines.append(meta.joined(separator: "  ")) }
         lines.append("")
-        lines.append("Prompt đứng  \(ByteFormat.bytes(report.standingBytes))  \(ByteFormat.tokens(report.standingBytes)) token ước lượng (byte/4)")
+        lines.append("Prompt đứng  \(ByteFormat.tokens(report.standingBytes)) token ước lượng (byte/4)")
         for slice in report.standing where slice.bytes > 0 {
-            lines.append("  \(slice.kind.label)  \(ByteFormat.bytes(slice.bytes))  \(ByteFormat.percent(slice.bytes, report.standingBytes))")
+            lines.append("  \(slice.kind.label)  \(ByteFormat.tokens(slice.bytes))  \(ByteFormat.percent(slice.bytes, report.standingBytes))")
         }
         if !report.sections.isEmpty {
             lines.append("")
             lines.append("System prompt")
             for section in report.sections {
-                lines.append("  \(section.name)  \(ByteFormat.bytes(section.bytes))")
+                lines.append("  \(section.name)  \(ByteFormat.tokens(section.bytes))")
             }
         }
         if !report.skills.isEmpty {
             lines.append("")
             lines.append("Skill trong prompt")
             for skill in report.skills {
-                let disk = skill.diskBytes.map { "đĩa \(ByteFormat.bytes($0))" } ?? "không thấy file"
-                lines.append("  \(skill.name)  catalog \(ByteFormat.bytes(skill.catalogBytes))  \(disk)  đọc \(skill.readCount)  \(skill.origin)")
+                let disk = skill.diskBytes.map { "đĩa \(ByteFormat.tokens($0))" } ?? "không thấy file"
+                lines.append("  \(skill.name)  catalog \(ByteFormat.tokens(skill.catalogBytes))  \(disk)  đọc \(skill.readCount)  \(skill.origin)")
             }
         }
         if !report.mcp.isEmpty {
@@ -440,21 +468,41 @@ public enum ReportText {
             lines.append("MCP trong prompt")
             for server in report.mcp {
                 let tools = server.toolCount.map { "\($0) tools" } ?? "tools ?"
-                lines.append("  \(server.name)  \(ByteFormat.bytes(server.catalogBytes))  \(server.status)  \(tools)")
+                lines.append("  \(server.name)  \(ByteFormat.tokens(server.catalogBytes))  \(server.status)  \(tools)")
             }
         }
         if !report.tools.isEmpty {
             lines.append("")
             lines.append("Tool")
             for tool in report.tools.prefix(20) {
-                lines.append("  \(tool.name)  def \(ByteFormat.bytes(tool.definitionBytes))  gọi \(tool.calls)  kết quả \(ByteFormat.bytes(tool.resultBytes))")
+                lines.append("  \(tool.name)  def \(ByteFormat.tokens(tool.definitionBytes))  gọi \(tool.calls)  kết quả \(ByteFormat.tokens(tool.resultBytes))")
             }
+        }
+        if !report.trajectory.isEmpty {
+            lines.append("")
+            lines.append("Trajectory")
+            let origin = report.trajectory.compactMap(\.at).min()
+            var shown = 0
+            for entry in report.trajectory where shown < 40 {
+                let clock: String
+                if let at = entry.at, let origin {
+                    clock = String(format: "+%.1fs", Double(at - origin) / 1000)
+                } else {
+                    clock = "     "
+                }
+                let size = entry.bytes > 0 ? "  \(ByteFormat.tokens(entry.bytes))" : ""
+                let duration = entry.durationMs.map { "  \($0) ms" } ?? ""
+                lines.append("  \(clock)  t\(entry.turn)  \(entry.kind)  \(entry.label)\(size)\(duration)")
+                shown += 1
+            }
+            let rest = report.trajectory.count - shown
+            if rest > 0 { lines.append("  … \(rest) dòng nữa") }
         }
         if !report.steering.isEmpty {
             lines.append("")
             lines.append("Steering")
             for doc in report.steering {
-                lines.append("  \(ByteFormat.bytes(doc.bytes))  \(doc.name)")
+                lines.append("  \(ByteFormat.tokens(doc.bytes))  \(doc.name)")
             }
         }
         if let pct = report.contextPercent {

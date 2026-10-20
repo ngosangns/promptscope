@@ -1,8 +1,7 @@
 version: '3'
 
-# Thin wrapper over macos/Makefile so there is one source of truth
-# for how things are built. Run `task --list` to see everything.
-# The analyzer lives in the Swift package. There is no Go module.
+# The analyzer and CLI live in macos/. The window is promptscope-gpui
+# in the sibling repo ns-gpui.
 
 tasks:
   default:
@@ -12,10 +11,9 @@ tasks:
     silent: true
 
   install:
-    desc: Install the CLI to ~/.local/bin and promptscope.app to /Applications
+    desc: Install the CLI to ~/.local/bin
     cmds:
       - task: cli:install
-      - task: app:install
 
   cli:build:
     desc: Build the release promptscope CLI
@@ -25,61 +23,47 @@ tasks:
 
   cli:install:
     desc: Install the CLI to ~/.local/bin/promptscope
-    dir: macos
     cmds:
-      - swift build -c release --product promptscope-cli
       - |
         set -eu
-        bin="$(swift build -c release --show-bin-path)/promptscope-cli"
-        mkdir -p "$HOME/.local/bin"
-        cp "$bin" "$HOME/.local/bin/promptscope"
-        chmod 755 "$HOME/.local/bin/promptscope"
-        echo "installed $HOME/.local/bin/promptscope"
+        ver="$(tr -d '[:space:]' < VERSION)"
+        main="macos/Sources/promptscope-cli/main.swift"
+        original="$(mktemp)"
+        cp "$main" "$original"
+        restore() { cp "$original" "$main"; rm -f "$original"; }
+        trap restore EXIT
+        perl -i -pe 's/^let releaseVersion = ".*"$/let releaseVersion = "'"$ver"'"/' "$main"
+        (cd macos && swift build -c release --product promptscope-cli)
+        restore
+        trap - EXIT
+        bin="$(cd macos && swift build -c release --show-bin-path)/promptscope-cli"
+        bindir="$HOME/.local/share/promptscope/bin"
+        mkdir -p "$bindir" "$HOME/.local/bin"
+        cp "$bin" "$bindir/promptscope-$ver"
+        chmod 755 "$bindir/promptscope-$ver"
+        (cd go && go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$bindir/promptscope-update-$ver" ./cmd/promptscope)
+        chmod 755 "$bindir/promptscope-update-$ver"
+        ln -sfn "../share/promptscope/bin/promptscope-$ver" "$HOME/.local/bin/promptscope"
+        echo "installed $HOME/.local/bin/promptscope -> $bindir/promptscope-$ver"
 
-  app:build:
-    desc: Build macos/promptscope.app (release, ad-hoc signed)
-    dir: macos
+  test:
+    desc: Test the updater and the Swift analyzer
     cmds:
-      - make
+      - task: cli:test
+      - task: kit:test
 
-  app:install:
-    desc: Build the macOS app and copy it to /Applications
-    dir: macos
+  cli:test:
+    desc: Vet and test the Go updater
+    dir: go
     cmds:
-      # Replacing a running bundle leaves the old binary in memory.
-      - pkill -x promptscope || true
-      - make install
+      - go vet ./...
+      - go test ./...
 
-  app:test:
-    desc: Test the Swift package
+  kit:test:
+    desc: Run the Swift test suite
     dir: macos
     cmds:
       - swift test
-
-  app:icon:
-    desc: Regenerate macos/Resources/AppIcon.icns from the logo script
-    dir: macos
-    cmds:
-      - make icon
-
-  app:clean:
-    desc: Remove the SwiftPM build and promptscope.app next to the package
-    dir: macos
-    cmds:
-      - make clean
-
-  dev:
-    desc: Build the macOS app in debug and launch it
-    dir: macos
-    cmds:
-      # Only the debug binary. The installed app's executable is named promptscope.
-      - pkill -x promptscope-app || true
-      - swift run promptscope-app
-
-  test:
-    desc: Run the Swift test suite
-    cmds:
-      - task: app:test
 
   release:build:
     desc: Test and build the release assets in dist/ (no publish)

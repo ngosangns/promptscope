@@ -8,6 +8,7 @@ public enum SessionAnalyzer {
         case .kiroCLI: KiroCLIAnalyzer.report(ref)
         case .omp, .pi: PiFamilyAnalyzer.report(ref)
         case .devin: DevinAnalyzer.report(ref)
+        case .dsh: DshAnalyzer.report(ref)
         }
     }
 
@@ -15,7 +16,7 @@ public enum SessionAnalyzer {
         switch ref.source {
         case .grok: GrokAnalyzer.digest(ref)
         case .omp, .pi: PiFamilyAnalyzer.digest(ref)
-        case .kiroIDE, .kiroCLI, .devin: report(for: ref).digest()
+        case .kiroIDE, .kiroCLI, .devin, .dsh: report(for: ref).digest()
         }
     }
 }
@@ -26,7 +27,8 @@ public enum LibraryScanner {
         kiroHome: URL,
         ompHome: URL,
         piHome: URL,
-        devinHome: URL
+        devinHome: URL,
+        dshHome: URL
     ) -> LibraryScan {
         var sessions: [SessionRef] = []
         var notes: [String] = []
@@ -62,6 +64,14 @@ public enum LibraryScanner {
         } else {
             notes.append("Không thấy \(devinTranscripts.path).")
         }
+        let dshSessions = dshHome.appendingPathComponent("sessions")
+        if FileManager.default.fileExists(atPath: dshSessions.path) {
+            let dsh = scanDsh(dshSessions)
+            sessions.append(contentsOf: dsh.sessions)
+            skipped += dsh.skipped
+        } else {
+            notes.append("Không thấy \(dshSessions.path).")
+        }
         return LibraryScan(sessions: sessions, skippedEmptyCLI: skipped, notes: notes)
     }
 
@@ -84,6 +94,10 @@ public enum LibraryScanner {
     public static var defaultDevinHome: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/share/devin")
+    }
+
+    public static var defaultDshHome: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dsh")
     }
 }
 
@@ -395,6 +409,69 @@ private func scanDevin(_ root: URL) -> [SessionRef] {
         ))
     }
     return sessions
+}
+
+private func scanDsh(_ root: URL) -> (sessions: [SessionRef], skipped: Int) {
+    guard let projects = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ) else { return ([], 0) }
+    var sessions: [SessionRef] = []
+    var skipped = 0
+    for project in projects where isDirectory(project) {
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: project,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { continue }
+        for child in children where isDirectory(child) {
+            guard let log = dshLog(child) else { continue }
+            let header = DshLog.header(url: log)
+            if header.version != 4 || !header.hasTurn {
+                skipped += 1
+                continue
+            }
+            let sessionID = header.id.isEmpty ? child.lastPathComponent : header.id
+            let modified = try? log.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            let title = header.title.isEmpty ? sessionID : header.title
+            sessions.append(SessionRef(
+                id: "dsh:\(sessionID)",
+                source: .dsh,
+                sessionID: sessionID,
+                title: title,
+                cwd: header.cwd,
+                model: header.model,
+                agent: header.agent,
+                createdAt: header.created,
+                updatedAt: modified ?? header.created,
+                locator: log.path,
+                transcriptBytes: Files.size(log),
+                isSubagent: header.subagent,
+                isTemporary: Paths.isTemporary(header.cwd),
+                contextPercent: nil,
+                fingerprint: "\(Files.size(log))|\(modified?.timeIntervalSince1970 ?? 0)"
+            ))
+        }
+    }
+    return (sessions, skipped)
+}
+
+/// Current log is `session.vN.jsonl` or `session.vN.jsonl.zstd`. The highest N wins.
+private func dshLog(_ directory: URL) -> URL? {
+    guard let files = try? FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil,
+        options: [.skipsHiddenFiles]
+    ) else { return nil }
+    var best: (version: Int, url: URL)?
+    for file in files {
+        let name = file.lastPathComponent
+        guard name.hasPrefix("session.v"), name.contains(".jsonl") else { continue }
+        let version = Int(name.dropFirst("session.v".count).prefix { $0.isNumber }) ?? 0
+        if best == nil || version > best!.version { best = (version, file) }
+    }
+    return best?.url
 }
 
 private func isDirectory(_ url: URL) -> Bool {
