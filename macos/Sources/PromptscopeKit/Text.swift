@@ -5,10 +5,6 @@ enum Files {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
     }
 
-    static func exists(_ path: String) -> Bool {
-        FileManager.default.fileExists(atPath: path)
-    }
-
     /// Read up to `maxBytes`. Yield returns false to stop. The result is true when the file continues past the cap.
     static func forEachLine(
         url: URL,
