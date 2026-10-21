@@ -75,3 +75,14 @@ tasks:
     prompt: This creates or updates a public GitHub release. Continue?
     cmds:
       - ./scripts/release-local.sh --publish
+
+  dev:install:
+    desc: Build the GUI from ../ns-gpui and install "Promptscope Dev.app" into ~/Applications
+    cmds:
+      - ../ns-gpui/scripts/install-dev.sh promptscope
+
+  dev:install:all:
+    desc: Install the promptscope CLI, then its Dev app
+    cmds:
+      - task: install
+      - task: dev:install
