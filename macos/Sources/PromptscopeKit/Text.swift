@@ -88,6 +88,26 @@ enum JSONFile {
     }
 }
 
+/// One reader for every clock the logs use: ISO strings, epoch seconds, epoch milliseconds.
+enum Clock {
+    static func millis(_ value: Any?) -> Int? {
+        if let text = value as? String {
+            if let date = Dates.parse(text) { return Int(date.timeIntervalSince1970 * 1000) }
+            return Double(text).flatMap { number(Int($0)) }
+        }
+        if let number = value as? Int { return Self.number(number) }
+        if let number = value as? Double { return Self.number(Int(number)) }
+        if let number = value as? NSNumber { return Self.number(number.intValue) }
+        return nil
+    }
+
+    private static func number(_ value: Int) -> Int? {
+        if value > 1_000_000_000_000 { return value }
+        if value > 1_000_000_000 { return value * 1000 }
+        return nil
+    }
+}
+
 enum Dates {
     static func parse(_ value: String?) -> Date? {
         guard let value, !value.isEmpty else { return nil }
@@ -97,6 +117,47 @@ enum Dates {
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]
         return plain.date(from: value)
+    }
+}
+
+/// Short, human label for a tool call: the name plus the most telling argument.
+enum TrailLabel {
+    private static let keys = [
+        "intent", "description", "command", "cmd", "path", "file_path", "target_file", "target_directory",
+        "directory", "filePath", "pattern", "query", "url", "skill", "name", "title", "task", "prompt",
+    ]
+
+    static func tool(_ name: String, _ arguments: Any?, intent: String? = nil) -> String {
+        var object: [String: Any]?
+        if let dictionary = arguments as? [String: Any] {
+            object = dictionary
+        } else if let text = arguments as? String, let data = text.data(using: .utf8) {
+            object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        }
+        var hint = intent ?? ""
+        if hint.isEmpty, let object {
+            for key in keys {
+                if let value = object[key] as? String, !value.isEmpty { hint = value; break }
+            }
+        }
+        let cleaned = PromptText.preview(hint, limit: 70)
+        return cleaned.isEmpty ? name : "\(name) · \(cleaned)"
+    }
+
+    static func isSubagent(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        if lower.contains("output") || lower.contains("result") { return false }
+        return lower.contains("subagent") || lower == "task" || lower == "workflow"
+    }
+
+    /// A failed tool result: an explicit flag, a non-zero exit code at the end, or a rejection notice.
+    static func looksFailed(_ text: String) -> Bool {
+        if text.hasPrefix("Tool rejected") || text.hasPrefix("Error:") || text.hasPrefix("Failed to ") { return true }
+        if text.contains("validation failed") && text.count < 600 { return true }
+        let tail = String(text.suffix(80))
+        guard let range = tail.range(of: "Exit code: ", options: .backwards) else { return false }
+        let code = tail[range.upperBound...].prefix { $0 == "-" || $0.isNumber }
+        return !code.isEmpty && code != "0"
     }
 }
 

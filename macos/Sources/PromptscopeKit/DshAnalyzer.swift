@@ -29,6 +29,11 @@ enum DshAnalyzer {
         var turns: [TurnMeasure] = []
         var trajectory: [TrajectoryEntry] = []
         var currentTurn = 0
+        var stepStart: Int?
+        var callEntries: [String: Int] = [:]
+        var jobEntries: [String: Int] = [:]
+        var compactionEntries: [String: Int] = [:]
+        var turnEntry: Int?
         var promptTokens: Int?
         var contextWindow: Int?
         var model: String?
@@ -57,6 +62,69 @@ enum DshAnalyzer {
             case "turn/start":
                 sawTurn = true
                 currentTurn = dshInt(data["turn"]) ?? currentTurn + 1
+            case "step/start":
+                stepStart = dshMillis(object["time"])
+            case "turn/end":
+                let reason = (data["reason"] as? [String: Any])?["kind"] as? String ?? "completed"
+                trajectory.close(turnEntry, at: dshMillis(object["time"]))
+                if reason != "completed" {
+                    trajectory.add(
+                        at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "error",
+                        label: "turn \(reason)", failed: true
+                    )
+                }
+            case "llm/retry":
+                let failure = data["failure"] as? [String: Any] ?? [:]
+                let retry = dshInt(data["retry"]).map { " \($0)/\(dshInt(data["maxRetries"]) ?? 0)" } ?? ""
+                trajectory.add(
+                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "retry",
+                    label: "retry\(retry) · " + PromptText.preview(
+                        (failure["code"] as? String ?? "") + " " + (failure["message"] as? String ?? ""), limit: 70
+                    ),
+                    durationMs: dshInt(data["delayMs"]), failed: true
+                )
+            case "assistant/attempt":
+                for item in data["stream"] as? [[String: Any]] ?? [] {
+                    let chunk = item["chunk"] as? [String: Any]
+                    guard chunk?["type"] as? String == "finish",
+                          let reason = chunk?["reason"] as? [String: Any],
+                          reason["kind"] as? String == "error" else { continue }
+                    let failure = reason["failure"] as? [String: Any] ?? [:]
+                    trajectory.add(
+                        at: dshMillis(item["time"]) ?? dshMillis(object["time"]), turn: max(currentTurn, 1),
+                        kind: "error", label: "request failed · " + PromptText.preview(failure["message"] as? String ?? "", limit: 70),
+                        failed: true
+                    )
+                }
+            case "job/registered":
+                let id = data["jobId"] as? String ?? ""
+                let label = data["label"] as? String ?? "job"
+                let index = trajectory.add(
+                    at: dshInt(data["startedAt"]) ?? dshMillis(object["time"]), turn: max(currentTurn, 1),
+                    kind: "job", label: PromptText.preview(label, limit: 70)
+                )
+                if !id.isEmpty { jobEntries[id] = index }
+            case "job/settled":
+                let status = data["status"] as? String ?? "completed"
+                let detail = data["detail"] as? String ?? ""
+                let bad = status != "completed" || detail.contains("exit code:") && !detail.hasSuffix("exit code: 0")
+                let index = jobEntries[data["jobId"] as? String ?? ""]
+                trajectory.close(index, at: dshInt(data["finishedAt"]) ?? dshMillis(object["time"]), failed: bad)
+                if let index, index < trajectory.count, status != "completed" {
+                    trajectory[index].label += " · \(status)"
+                }
+            case "todo/write":
+                let todos = data["todos"] as? [[String: Any]] ?? []
+                let done = todos.filter { $0["status"] as? String == "completed" }.count
+                trajectory.add(
+                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                    label: "todos \(done)/\(todos.count) done"
+                )
+            case "model/selection":
+                trajectory.add(
+                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                    label: "model → \(data["provider"] as? String ?? "?")/\(data["model"] as? String ?? "?")"
+                )
             case "system/message":
                 let text = dshMessageText(data["message"])
                 standing[.system] = text.utf8.count
@@ -70,6 +138,11 @@ enum DshAnalyzer {
                 case "skill-catalog":
                     catalogBytes = text.utf8.count
                     skills = dshParseSkills(text)
+                case "skill-invocation":
+                    trajectory.add(
+                        at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                        label: "skill invoked · " + PromptText.preview(text, limit: 60), bytes: text.utf8.count
+                    )
                 case "runtime-context":
                     runtimeBytes = text.utf8.count
                 case "time-context":
@@ -80,6 +153,7 @@ enum DshAnalyzer {
                         index: trajectory.count, at: dshMillis(object["time"]), turn: max(currentTurn, turnIndex + 1),
                         kind: "user", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
                     ))
+                    turnEntry = trajectory.count - 1
                     turnIndex += 1
                     openPreview = PromptText.preview(text, limit: 140)
                     userBytes = text.utf8.count
@@ -114,11 +188,15 @@ enum DshAnalyzer {
                 model = dshNonEmpty(data["model"]) ?? model
             case "tool/call":
                 let name = data["name"] as? String ?? "tool"
-                if let callID = data["callId"] as? String { callNames[callID] = name }
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: dshMillis(object["time"]), turn: currentTurn,
-                    kind: "tool", label: name, bytes: (data["arguments"] as? String ?? "").utf8.count
-                ))
+                let callID = data["callId"] as? String ?? ""
+                if !callID.isEmpty { callNames[callID] = name }
+                let arguments = data["arguments"] as? String ?? ""
+                let index = trajectory.add(
+                    at: dshMillis(object["time"]), turn: currentTurn,
+                    kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                    label: TrailLabel.tool(name, arguments), bytes: arguments.utf8.count
+                )
+                if !callID.isEmpty { callEntries[callID] = index }
                 var row = tools[name] ?? ToolMeasure(name: name)
                 row.calls += 1
                 tools[name] = row
@@ -126,44 +204,77 @@ enum DshAnalyzer {
                 let message = data["message"] as? [String: Any] ?? [:]
                 let callID = message["toolCallId"] as? String ?? ""
                 let name = callNames[callID] ?? "tool"
-                let size = dshContentText(message["content"]).utf8.count
+                let body = dshContentText(message["content"])
+                let size = body.utf8.count
                 var row = tools[name] ?? ToolMeasure(name: name)
                 row.resultBytes += size
                 tools[name] = row
                 transcript[.toolResult, default: 0] += size
                 replyBytes += size
                 if size > 0 { heavy.append((name, size)) }
-                if let index = trajectory.lastIndex(where: { $0.kind == "tool" && $0.label == name && $0.durationMs == nil }) {
-                    trajectory[index].bytes += size
-                    if let start = trajectory[index].at, let end = dshMillis(object["time"]), end >= start {
-                        trajectory[index].durationMs = end - start
-                    }
-                }
+                let failed = message["isError"] as? Bool ?? false
+                trajectory.close(callEntries[callID], at: dshMillis(object["time"]), bytes: size, failed: failed)
             case "assistant/message":
                 let message = data["message"] as? [String: Any] ?? [:]
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: dshMillis(object["time"]), turn: currentTurn,
-                    kind: "assistant", label: PromptText.preview(dshContentText(message["content"]), limit: 80),
-                    bytes: dshContentText(message["content"]).utf8.count
-                ))
+                let at = dshMillis(object["time"])
+                let began = stepStart ?? at
+                let usage = data["usage"] as? [String: Any]
+                // The prompt the provider saw is fresh input plus the cached prefix.
+                let input = dshInt(usage?["inputTokens"]).map { $0 + (dshInt(usage?["cacheReadTokens"]) ?? 0) }
                 let parts = message["content"] as? [[String: Any]] ?? []
+                var first = true
+                func think() -> Int? {
+                    guard first, let at, let began, at >= began else { return nil }
+                    first = false
+                    return at - began
+                }
                 for part in parts {
                     let size = (part["text"] as? String ?? "").utf8.count
-                    if part["type"] as? String == "reasoning" {
+                    let type = part["type"] as? String
+                    if type == "reasoning" {
                         transcript[.reasoning, default: 0] += size
+                        if size > 0 {
+                            trajectory.add(
+                                at: began, turn: currentTurn, kind: "reasoning", label: "reasoning", bytes: size,
+                                durationMs: think(), tokens: input
+                            )
+                        }
+                    } else if type == "text" {
+                        transcript[.assistant, default: 0] += size
+                        if size > 0 {
+                            trajectory.add(
+                                at: began, turn: currentTurn, kind: "assistant",
+                                label: PromptText.preview(part["text"] as? String ?? "", limit: 80), bytes: size,
+                                durationMs: think(), tokens: input
+                            )
+                        }
                     } else {
                         transcript[.assistant, default: 0] += size
                     }
                     replyBytes += size
                 }
-                if let usage = data["usage"] as? [String: Any] {
-                    promptTokens = dshInt(usage["inputTokens"]) ?? promptTokens
+                // A cached prefix is billed apart but is still in the prompt: a session whose
+                // every request hits the cache records inputTokens 0.
+                if let input { promptTokens = input }
+                if message["interrupted"] as? Bool == true || data["interrupted"] as? Bool == true {
+                    trajectory.add(at: at, turn: currentTurn, kind: "error", label: "reply interrupted", failed: true)
                 }
             case "compaction/start":
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: dshMillis(object["time"]), turn: currentTurn,
-                    kind: "compaction", label: "compaction started", bytes: 0
-                ))
+                let id = data["compactionId"] as? String ?? ""
+                let index = trajectory.add(
+                    at: dshMillis(object["time"]), turn: currentTurn, kind: "compaction", label: "compaction"
+                )
+                if !id.isEmpty { compactionEntries[id] = index }
+            case "compaction/summary":
+                let index = compactionEntries[data["compactionId"] as? String ?? ""]
+                if let index, index < trajectory.count {
+                    let hidden = dshInt(data["shadowedTokenCount"]) ?? 0
+                    let summary = dshContentText(data["summary"]).utf8.count
+                    trajectory[index].bytes = summary
+                    trajectory[index].label = "compaction · \(hidden) tokens → summary"
+                }
+            case "compaction/end":
+                trajectory.close(compactionEntries[data["compactionId"] as? String ?? ""], at: dshMillis(object["time"]))
             case "compaction/prune":
                 prunedRanges += 1
                 prunedTokens += dshInt(data["shadowedTokenCount"]) ?? 0

@@ -20,6 +20,12 @@ enum KiroIDEAnalyzer {
         var turnUser = 0
         var turnReply = 0
         var sawTurn = false
+        var callEntries: [String: Int] = [:]
+        var approvals: [String: Int] = [:]
+        var subagents: [String: Int] = [:]
+        var turnEntry: Int?
+        var lastEventAt: Int?
+        var hookRuns = 0
 
         func add(_ kind: SliceKind, _ bytes: Int) {
             guard bytes > 0 else { return }
@@ -31,6 +37,8 @@ enum KiroIDEAnalyzer {
             guard let object = JSONFile.lineObject(line) else { return true }
             let payload = object["payload"] as? [String: Any] ?? object
             let type = payload["type"] as? String ?? ""
+            let at = kiroMillis(object["timestamp"])
+            defer { if !["ContextualHookInvoked", "session_metadata"].contains(type) { lastEventAt = at ?? lastEventAt } }
             switch type {
             case "user":
                 let text = payload["content"] as? String ?? ""
@@ -40,10 +48,9 @@ enum KiroIDEAnalyzer {
                     turns[index] = TurnMeasure(index: index + 1, preview: turns[index].preview, userBytes: turnUser, replyBytes: turnReply)
                 }
                 turns.append(TurnMeasure(index: turns.count + 1, preview: PromptText.preview(text), userBytes: text.utf8.count, replyBytes: 0))
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: turns.count,
-                    kind: "user", label: PromptText.preview(text), bytes: text.utf8.count
-                ))
+                turnEntry = trajectory.add(
+                    at: at, turn: turns.count, kind: "user", label: PromptText.preview(text), bytes: text.utf8.count
+                )
                 turnUser = text.utf8.count
                 turnReply = 0
                 sawTurn = true
@@ -51,10 +58,13 @@ enum KiroIDEAnalyzer {
                 let text = payload["content"] as? String ?? ""
                 add(.assistant, text.utf8.count)
                 turnReply += text.utf8.count
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: max(turns.count, 1),
-                    kind: "assistant", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
-                ))
+                // The log stamps a reply when it lands, so the gap since the last event is the wait for the model.
+                let reasoning = payload["operationType"] as? String == "Reasoning"
+                trajectory.add(
+                    at: at, turn: max(turns.count, 1), kind: reasoning ? "reasoning" : "assistant",
+                    label: reasoning ? "reasoning" : PromptText.preview(text, limit: 80), bytes: text.utf8.count,
+                    durationMs: lastEventAt.flatMap { start in at.map { $0 - start } }.flatMap { $0 >= 0 ? $0 : nil }
+                )
             case "tool_call":
                 let name = payload["toolName"] as? String ?? "tool"
                 let id = payload["toolCallId"] as? String ?? ""
@@ -63,10 +73,13 @@ enum KiroIDEAnalyzer {
                 add(.other, args.utf8.count)
                 bumpTool(&tools, name: name, call: true, result: 0)
                 absorbSkills(args, into: &skills)
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: kiroMillis(object["timestamp"]), turn: max(turns.count, 1),
-                    kind: "tool", label: name, bytes: args.utf8.count
-                ))
+                let status = payload["status"] as? String ?? ""
+                let index = trajectory.add(
+                    at: at, turn: max(turns.count, 1), kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                    label: TrailLabel.tool(name, payload["args"], intent: nil), bytes: args.utf8.count,
+                    failed: status == "denied" || status == "failed"
+                )
+                if !id.isEmpty { callEntries[id] = index }
             case "tool_result":
                 let text = payload["content"] as? String ?? jsonText(payload["content"])
                 let bytes = text.utf8.count
@@ -76,9 +89,41 @@ enum KiroIDEAnalyzer {
                 let name = callNames[id] ?? "tool"
                 bumpTool(&tools, name: name, call: false, result: bytes)
                 considerHeavy(&heavy, tool: name, bytes: bytes)
-                if let index = trajectory.lastIndex(where: { $0.kind == "tool" && $0.label == name && $0.durationMs == nil }),
-                   let start = trajectory[index].at, let end = kiroMillis(object["timestamp"]), end >= start {
-                    trajectory[index].durationMs = end - start
+                trajectory.close(callEntries[id], at: at, bytes: bytes, failed: payload["success"] as? Bool == false)
+            case "pending_interaction":
+                let id = payload["toolCallId"] as? String ?? ""
+                let index = trajectory.add(
+                    at: at, turn: max(turns.count, 1), kind: "approval",
+                    label: "waiting · " + PromptText.preview(payload["question"] as? String ?? "approval", limit: 60)
+                )
+                if !id.isEmpty { approvals[id] = index }
+            case "interaction_resolved":
+                let index = approvals[payload["toolCallId"] as? String ?? ""]
+                let chosen = payload["selectedOption"] as? String ?? payload["outcome"] as? String ?? ""
+                trajectory.close(index, at: at, failed: chosen == "reject" || chosen == "cancelled" || payload["outcome"] as? String == "cancelled")
+                if let index, index < trajectory.count, !chosen.isEmpty { trajectory[index].label += " → \(chosen)" }
+            case "sub_agent_start":
+                let id = payload["subSessionId"] as? String ?? ""
+                let name = payload["subAgentName"] as? String ?? "agent"
+                let index = trajectory.add(
+                    at: at, turn: max(turns.count, 1), kind: "subagent",
+                    label: "\(name) · " + PromptText.preview(payload["explanation"] as? String ?? payload["prompt"] as? String ?? "", limit: 60),
+                    bytes: (payload["prompt"] as? String ?? "").utf8.count
+                )
+                if !id.isEmpty { subagents[id] = index }
+            case "sub_agent_complete":
+                let index = subagents[payload["subSessionId"] as? String ?? ""]
+                trajectory.close(
+                    index, at: at, bytes: (payload["response"] as? String ?? "").utf8.count,
+                    failed: (payload["status"] as? String ?? "success") != "success"
+                )
+            case "ContextualHookInvoked":
+                hookRuns += 1
+            case "turn_end":
+                let reason = payload["stopReason"] as? String ?? "end_turn"
+                trajectory.close(turnEntry, at: at)
+                if reason != "end_turn" {
+                    trajectory.add(at: at, turn: max(turns.count, 1), kind: "error", label: "turn \(reason)", failed: true)
                 }
             case "steering_inclusion":
                 let docs = payload["documents"] as? [String] ?? []
@@ -86,6 +131,7 @@ enum KiroIDEAnalyzer {
                     let path = pathOf(doc)
                     return NamedBytes(name: path, bytes: SkillFiles.diskBytes(path) ?? 0, detail: "steering")
                 }
+                trajectory.add(at: at, turn: max(turns.count, 1), kind: "notice", label: "steering · \(docs.count) files")
             case "session_metadata":
                 if payload["key"] as? String == "contextUsage" {
                     let value = payload["value"] as? [String: Any]
@@ -93,7 +139,16 @@ enum KiroIDEAnalyzer {
                 }
             case "usage_summary":
                 let rows = payload["promptTurnSummaries"] as? [[String: Any]] ?? []
-                for row in rows { credits += number(row["usage"]) ?? 0 }
+                var turnCredits = 0.0
+                for row in rows { turnCredits += number(row["usage"]) ?? 0 }
+                credits += turnCredits
+                let elapsed = number(payload["elapsedTime"]).map { Int($0) }
+                let used = Set(rows.flatMap { $0["usedTools"] as? [String] ?? [] }).count
+                trajectory.add(
+                    at: at, turn: max(turns.count, 1), kind: "notice",
+                    label: String(format: "%.2f credits · %d tools · %@", turnCredits, used, payload["status"] as? String ?? "done"),
+                    durationMs: elapsed, failed: (payload["status"] as? String ?? "success") != "success"
+                )
             default:
                 break
             }
@@ -106,6 +161,10 @@ enum KiroIDEAnalyzer {
         if truncated {
             notes.append("The transcript is longer than the read limit.")
         }
+        if hookRuns > 0 {
+            notes.append("\(hookRuns) hook runs are counted but not drawn as events.")
+        }
+        notes.append("Kiro stamps a tool call and its result at the same instant, so tool rows have no duration. Reasoning and reply rows show the wait since the previous event.")
         if credits > 0 {
             notes.append(String(format: "Kiro recorded %.2f credits for the completed turns.", credits))
         }
@@ -168,30 +227,66 @@ enum KiroCLIAnalyzer {
             transcript[kind, default: 0] += bytes
         }
 
+        // The sidecar JSON keeps one record per user turn: which messages belong to it,
+        // when it ended, how long it took, and what it cost. The transcript has no clock
+        // of its own except the prompt.
+        let sidecar = JSONFile.object(url: jsonURL)
+        let metas = ((sidecar?["session_state"] as? [String: Any])?["conversation_metadata"] as? [String: Any])?["user_turn_metadatas"] as? [[String: Any]] ?? []
+        var messageTurn: [String: Int] = [:]
+        for (index, meta) in metas.enumerated() {
+            for id in meta["message_ids"] as? [String] ?? [] { messageTurn[id] = index }
+        }
+        var turnFirst: [Int: Int] = [:]
+        var turnLast: [Int: Int] = [:]
+        var callEntries: [String: Int] = [:]
+        var currentTurnIndex = -1
+        var promptStarts: [Int: Int] = [:]
+
+        func note(_ turn: Int, _ index: Int) {
+            if turnFirst[turn] == nil { turnFirst[turn] = index }
+            turnLast[turn] = index
+        }
+
         let truncated = Files.forEachLine(url: jsonlURL, maxBytes: GrokAnalyzer.reportCap) { line in
             guard let object = JSONFile.lineObject(line) else { return true }
             let kind = object["kind"] as? String ?? ""
             let data = object["data"] as? [String: Any] ?? [:]
+            if let id = data["message_id"] as? String, let turn = messageTurn[id] { currentTurnIndex = turn }
+            let turnNumber = max(currentTurnIndex + 1, turns.count, 1)
             switch kind {
             case "Prompt":
                 let text = partText(data["content"])
                 add(.user, text.utf8.count)
                 turns.append(TurnMeasure(index: turns.count + 1, preview: PromptText.preview(text), userBytes: text.utf8.count, replyBytes: 0))
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: nil, turn: turns.count, kind: "user", label: PromptText.preview(text), bytes: text.utf8.count
-                ))
+                let stamp = Clock.millis((data["meta"] as? [String: Any])?["timestamp"])
+                let index = trajectory.add(
+                    at: stamp, turn: max(currentTurnIndex + 1, turns.count), kind: "user",
+                    label: PromptText.preview(text), bytes: text.utf8.count
+                )
+                if currentTurnIndex >= 0 { promptStarts[currentTurnIndex] = stamp ?? 0; note(currentTurnIndex, index) }
                 turnReply = 0
             case "AssistantMessage":
                 guard let parts = data["content"] as? [[String: Any]] else { break }
                 for part in parts {
                     let partKind = part["kind"] as? String ?? ""
+                    var index: Int?
                     if partKind == "text", let text = part["data"] as? String {
                         add(.assistant, text.utf8.count)
                         turnReply += text.utf8.count
+                        if !text.isEmpty {
+                            index = trajectory.add(
+                                at: nil, turn: turnNumber, kind: "assistant",
+                                label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
+                            )
+                        }
                     } else if partKind == "thinking" {
                         let bytes = stringBytes(part["data"])
                         add(.reasoning, bytes)
                         turnReply += bytes
+                        let visible = ((part["data"] as? [String: Any])?["text"] as? String ?? "").utf8.count
+                        if visible > 0 {
+                            index = trajectory.add(at: nil, turn: turnNumber, kind: "reasoning", label: "reasoning", bytes: visible)
+                        }
                     } else if partKind == "toolUse", let payload = part["data"] as? [String: Any] {
                         let name = payload["name"] as? String ?? "tool"
                         let id = payload["toolUseId"] as? String ?? ""
@@ -200,12 +295,21 @@ enum KiroCLIAnalyzer {
                         add(.other, args.utf8.count)
                         bumpTool(&tools, name: name, call: true, result: 0)
                         absorbSkills(args, into: &skills)
-                        trajectory.append(TrajectoryEntry(
-                            index: trajectory.count, at: nil, turn: max(turns.count, 1), kind: "tool", label: name, bytes: args.utf8.count
-                        ))
+                        let call = trajectory.add(
+                            at: nil, turn: turnNumber, kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                            label: TrailLabel.tool(name, payload["input"]), bytes: args.utf8.count
+                        )
+                        if !id.isEmpty { callEntries[id] = call }
+                        index = call
                     }
+                    if let index, currentTurnIndex >= 0 { note(currentTurnIndex, index) }
                 }
             case "ToolResults":
+                var failedIDs = Set<String>()
+                for item in data["content"] as? [[String: Any]] ?? [] {
+                    let result = item["data"] as? [String: Any]
+                    if result?["status"] as? String == "error", let id = result?["toolUseId"] as? String { failedIDs.insert(id) }
+                }
                 let results = data["results"] as? [String: Any] ?? [:]
                 for (id, value) in results {
                     let bytes = stringBytes(value)
@@ -214,6 +318,8 @@ enum KiroCLIAnalyzer {
                     let name = callNames[id] ?? "tool"
                     bumpTool(&tools, name: name, call: false, result: bytes)
                     considerHeavy(&heavy, tool: name, bytes: bytes)
+                    let resultBytes = stringBytes((value as? [String: Any])?["result"])
+                    trajectory.close(callEntries[id], at: nil, bytes: resultBytes, failed: failedIDs.contains(id))
                 }
                 if !turns.isEmpty {
                     let index = turns.count - 1
@@ -223,6 +329,41 @@ enum KiroCLIAnalyzer {
                 add(.other, line.utf8.count)
             }
             return true
+        }
+
+        // Spread each turn's events over the time the sidecar recorded for it. The order is
+        // real; the position inside the turn is interpolated, and the durations stay empty.
+        var interpolated = false
+        for (turn, meta) in metas.enumerated() {
+            guard let first = turnFirst[turn], let last = turnLast[turn] else { continue }
+            let seconds = (meta["turn_duration"] as? [String: Any]).map {
+                (number($0["secs"]) ?? 0) + (number($0["nanos"]) ?? 0) / 1_000_000_000
+            } ?? 0
+            let end = kiroMillis(meta["end_timestamp"])
+            let begin = trajectory[first].at ?? end.map { $0 - Int(seconds * 1000) }
+            guard let begin else { continue }
+            let span = max((end ?? begin) - begin, 0)
+            let count = max(last - first, 1)
+            for index in first...last where trajectory[index].at == nil {
+                trajectory[index].at = begin + span * (index - first) / count
+                interpolated = true
+            }
+            let requests = Int(number(meta["total_request_count"]) ?? 0)
+            let credits = (meta["metering_usage"] as? [[String: Any]] ?? []).reduce(0.0) { $0 + (number($1["value"]) ?? 0) }
+            let ended = meta["end_reason"] as? String ?? "UserTurnEnd"
+            trajectory.add(
+                at: end ?? begin + span, turn: turn + 1, kind: "notice",
+                label: String(format: "turn done · %d requests · %.2f credits · %@", requests, credits, meta["model"] as? String ?? "?"),
+                durationMs: Int(seconds * 1000), failed: ended != "UserTurnEnd",
+                tokens: number(meta["final_context_usage_percentage"]).flatMap { percent in
+                    contextWindow.map { Int(percent / 100 * Double($0)) }
+                }
+            )
+        }
+        trajectory.sort { ($0.at ?? Int.max, $0.index) < ($1.at ?? Int.max, $1.index) }
+        for index in trajectory.indices { trajectory[index].index = index }
+        if interpolated {
+            notes.append("Kiro CLI stamps only the prompt and the end of each turn. Events in between keep their real order and are spread across the recorded turn time.")
         }
         if truncated { notes.append("The transcript is longer than the read limit.") }
         notes.append("The byte/4 token estimate is used only when the sidecar has no context window.")

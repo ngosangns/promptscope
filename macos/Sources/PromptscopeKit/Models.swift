@@ -224,6 +224,9 @@ public struct SectionMeasure: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+/// One event on the session timeline. `kind` is one of `user`, `reasoning`,
+/// `assistant`, `tool`, `compaction`, `subagent`, `approval`, `retry`, `error`,
+/// `notice`. Every analyzer fills what its log records and leaves the rest nil.
 public struct TrajectoryEntry: Codable, Sendable, Hashable, Identifiable {
     public var id: Int { index }
     public var index: Int
@@ -235,8 +238,15 @@ public struct TrajectoryEntry: Codable, Sendable, Hashable, Identifiable {
     public var bytes: Int
     /// Duration in milliseconds, when the log records one.
     public var durationMs: Int?
+    /// A tool call, request, or turn that ended in an error.
+    public var failed: Bool
+    /// Prompt tokens the provider recorded for the request this event belongs to.
+    public var tokens: Int?
 
-    public init(index: Int, at: Int?, turn: Int, kind: String, label: String, bytes: Int, durationMs: Int? = nil) {
+    public init(
+        index: Int, at: Int?, turn: Int, kind: String, label: String, bytes: Int,
+        durationMs: Int? = nil, failed: Bool = false, tokens: Int? = nil
+    ) {
         self.index = index
         self.at = at
         self.turn = turn
@@ -244,6 +254,35 @@ public struct TrajectoryEntry: Codable, Sendable, Hashable, Identifiable {
         self.label = label
         self.bytes = bytes
         self.durationMs = durationMs
+        self.failed = failed
+        self.tokens = tokens
+    }
+}
+
+extension Array where Element == TrajectoryEntry {
+    /// Appends an event and returns its index, so a later result can close it.
+    @discardableResult
+    mutating func add(
+        at: Int?, turn: Int, kind: String, label: String, bytes: Int = 0,
+        durationMs: Int? = nil, failed: Bool = false, tokens: Int? = nil
+    ) -> Int {
+        append(TrajectoryEntry(
+            index: count, at: at, turn: turn, kind: kind, label: label, bytes: bytes,
+            durationMs: durationMs, failed: failed, tokens: tokens
+        ))
+        return count - 1
+    }
+
+    /// Closes a tool, approval, or subagent entry: adds the output size, derives the
+    /// duration from the two clocks, and marks a failure.
+    mutating func close(_ index: Int?, at: Int?, bytes: Int = 0, failed: Bool = false) {
+        guard let index, index < count else { return }
+        self[index].bytes += bytes
+        // A zero span means the log stamped both ends at one instant. That is no measurement.
+        if let start = self[index].at, let at, at > start {
+            self[index].durationMs = Swift.max(self[index].durationMs ?? 0, at - start)
+        }
+        if failed { self[index].failed = true }
     }
 }
 
@@ -479,24 +518,11 @@ public enum ReportText {
             }
         }
         if !report.trajectory.isEmpty {
+            // The window draws the events. The text keeps one line so the report stays short.
+            let failed = report.trajectory.filter(\.failed).count
+            let timed = report.trajectory.contains { $0.at != nil }
             lines.append("")
-            lines.append("Trajectory")
-            let origin = report.trajectory.compactMap(\.at).min()
-            var shown = 0
-            for entry in report.trajectory where shown < 40 {
-                let clock: String
-                if let at = entry.at, let origin {
-                    clock = String(format: "+%.1fs", Double(at - origin) / 1000)
-                } else {
-                    clock = "     "
-                }
-                let size = entry.bytes > 0 ? "  \(ByteFormat.tokens(entry.bytes))" : ""
-                let duration = entry.durationMs.map { "  \($0) ms" } ?? ""
-                lines.append("  \(clock)  t\(entry.turn)  \(entry.kind)  \(entry.label)\(size)\(duration)")
-                shown += 1
-            }
-            let rest = report.trajectory.count - shown
-            if rest > 0 { lines.append("  … \(rest) more lines") }
+            lines.append("Trajectory  \(report.trajectory.count) events  \(failed) failed  \(timed ? "timed" : "no clock")  (report … --json lists them)")
         }
         if !report.steering.isEmpty {
             lines.append("")

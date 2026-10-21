@@ -90,7 +90,28 @@ case "report":
     )
     let report = SessionAnalyzer.report(for: ref)
     if arguments.count >= 4, arguments[3] == "--json" {
+        // Encodes a Codable value as plain JSON objects, so the window reads the same
+        // fields the Kit holds and the CLI does not keep a second field list.
+        func plain<T: Encodable>(_ value: T) -> Any {
+            guard let data = try? JSONEncoder().encode(value),
+                  let object = try? JSONSerialization.jsonObject(with: data) else { return [] }
+            return object
+        }
         let payload: [String: Any] = [
+            "standing": plain(report.standing),
+            "transcript": plain(report.transcript),
+            "sections": plain(report.sections),
+            "skills": plain(report.skills),
+            "mcp": plain(report.mcp),
+            "tools": plain(report.tools),
+            "turns": plain(report.turns),
+            "heavy": plain(report.heavy),
+            "steering": plain(report.steering),
+            "notes": report.notes,
+            "contextPercent": report.contextPercent as Any,
+            "contextWindow": report.contextWindow as Any,
+            "promptTokens": report.promptTokens as Any,
+            "truncated": report.truncated,
             "entries": report.trajectory.map { entry in
                 [
                     "at": entry.at as Any,
@@ -99,6 +120,8 @@ case "report":
                     "label": entry.label,
                     "bytes": entry.bytes,
                     "durationMs": entry.durationMs as Any,
+                    "failed": entry.failed,
+                    "tokens": entry.tokens as Any,
                 ] as [String: Any]
             },
         ]

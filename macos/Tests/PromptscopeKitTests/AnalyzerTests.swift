@@ -170,6 +170,74 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertEqual(report.standing.first { $0.kind == .system }?.bytes, system.utf8.count)
     }
 
+    func testGrokTrajectoryFromUpdatesStream() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = root.appendingPathComponent("grok/sess", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        try writeJSONLines([
+            ["type": "system", "content": "You are a test agent."],
+            ["type": "user", "content": "<user_query>hi</user_query>"],
+        ], session.appendingPathComponent("chat_history.jsonl"))
+        func row(_ update: [String: Any], _ ms: Int) -> [String: Any] {
+            ["timestamp": ms / 1000, "method": "session/update",
+             "params": ["sessionId": "sess", "update": update, "_meta": ["agentTimestampMs": ms]]]
+        }
+        let base = 1_792_000_000_000
+        try writeJSONLines([
+            row(["sessionUpdate": "hook_execution", "event_name": "pre_tool_use"], base),
+            row(["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": "fix it"],
+                 "_meta": ["promptIndex": 0]], base + 100),
+            row(["sessionUpdate": "agent_thought_chunk", "content": ["type": "text", "text": "thinking"]], base + 1_000),
+            row(["sessionUpdate": "agent_message_chunk", "content": ["type": "text", "text": "reading"]], base + 2_000),
+            row(["sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read_file",
+                 "rawInput": ["path": "a"],
+                 "_meta": ["x.ai/tool": ["name": "read_file"]]], base + 3_000),
+            row(["sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed",
+                 "content": [["type": "content", "content": ["type": "text", "text": "file body"]]]], base + 3_500),
+            row(["sessionUpdate": "auto_compact_started", "tokens_used": 200], base + 4_000),
+            row(["sessionUpdate": "auto_compact_completed", "tokens_before": 200, "tokens_after": 20,
+                 "elapsed_ms": 900], base + 4_900),
+        ], session.appendingPathComponent("updates.jsonl"))
+        let ref = SessionRef(
+            id: "grok:sess", source: .grok, sessionID: "sess", title: "t", cwd: "/tmp/x", model: "grok-4.7",
+            agent: nil, createdAt: nil, updatedAt: nil, locator: session.path, transcriptBytes: 1,
+            isSubagent: false, isTemporary: false, contextPercent: nil, fingerprint: "x"
+        )
+        let trail = SessionAnalyzer.report(for: ref).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["user", "reasoning", "assistant", "tool", "compaction"])
+        XCTAssertEqual(trail[0].turn, 1)
+        XCTAssertEqual(trail[0].at, base + 100)
+        XCTAssertEqual(trail[3].label, "read_file · a")
+        XCTAssertEqual(trail[3].durationMs, 500)
+        XCTAssertGreaterThan(trail[3].bytes, "file body".utf8.count)
+        XCTAssertEqual(trail[4].durationMs, 900)
+        XCTAssertEqual(trail[4].label, "compaction 200 → 20 tokens")
+    }
+
+    func testGrokTrajectoryFallsBackToChatHistory() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = root.appendingPathComponent("grok/sess", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        try writeJSONLines([
+            ["type": "system", "content": "You are a test agent."],
+            ["type": "user", "content": "<user_query>list files</user_query>"],
+            ["type": "assistant", "content": "listing", "tool_calls": [["id": "c1", "name": "list_dir", "arguments": "{}"]]],
+            ["type": "tool_result", "tool_call_id": "c1", "content": "a b c"],
+        ], session.appendingPathComponent("chat_history.jsonl"))
+        let ref = SessionRef(
+            id: "grok:sess", source: .grok, sessionID: "sess", title: "t", cwd: "/tmp/x", model: "grok-4.7",
+            agent: nil, createdAt: nil, updatedAt: nil, locator: session.path, transcriptBytes: 1,
+            isSubagent: false, isTemporary: false, contextPercent: nil, fingerprint: "x"
+        )
+        let report = SessionAnalyzer.report(for: ref)
+        XCTAssertEqual(report.trajectory.map(\.kind), ["user", "assistant", "tool"])
+        XCTAssertNil(report.trajectory[0].at)
+        XCTAssertEqual(report.trajectory[2].label, "list_dir")
+        XCTAssertGreaterThan(report.trajectory[2].bytes, "a b c".utf8.count - 1)
+    }
+
     func testKiroAndScanner() throws {
         let root = try makeTemp()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -587,14 +655,243 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.calls, 1)
         XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.resultBytes, "Cargo.toml".utf8.count)
         XCTAssertEqual(dshReport.turns.first?.preview, "measure this session")
-        XCTAssertEqual(dshReport.trajectory.map(\.kind), ["user", "tool", "assistant"])
-        XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.label, "bash")
+        XCTAssertEqual(dshReport.trajectory.map(\.kind), ["user", "tool", "reasoning", "assistant"])
+        XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.label, "bash · ls")
         XCTAssertNotNil(dshReport.trajectory.first?.at)
         XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.durationMs, 1000)
         XCTAssertEqual(dshReport.transcript.first { $0.kind == .reasoning }?.bytes, "measuring".utf8.count)
         XCTAssertTrue(dshReport.notes.contains { $0.contains("120") })
         let dshDigest = SessionAnalyzer.digest(for: byID["session-dsh-1"]!)
         XCTAssertEqual(dshDigest.promptTokens, 21_206)
+    }
+
+    // MARK: Trajectory per agent
+
+    private func ref(_ source: AgentSource, _ locator: String) -> SessionRef {
+        SessionRef(
+            id: "\(source.rawValue):t", source: source, sessionID: "t", title: "t", cwd: "/tmp/x", model: "m",
+            agent: nil, createdAt: nil, updatedAt: nil, locator: locator, transcriptBytes: 1,
+            isSubagent: false, isTemporary: false, contextPercent: nil, fingerprint: "x"
+        )
+    }
+
+    func testGrokTrajectoryMarksFailuresRetriesAndLabels() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = root.appendingPathComponent("grok/sess", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        try writeJSONLines([["type": "system", "content": "x"]], session.appendingPathComponent("chat_history.jsonl"))
+        func row(_ update: [String: Any], _ ms: Int, total: Int? = nil) -> [String: Any] {
+            var meta: [String: Any] = ["agentTimestampMs": ms]
+            if let total { meta["totalTokens"] = total }
+            return ["method": "session/update", "params": ["update": update, "_meta": meta]]
+        }
+        let base = 1_792_000_000_000
+        try writeJSONLines([
+            row(["sessionUpdate": "user_message_chunk", "content": ["type": "text", "text": "go"], "_meta": ["promptIndex": 0]], base),
+            row(["sessionUpdate": "tool_call", "toolCallId": "a", "title": "read_file", "rawInput": [:],
+                 "_meta": ["x.ai/tool": ["name": "read_file", "input": ["target_file": "/a/b.md"]]]], base + 1_000, total: 777),
+            row(["sessionUpdate": "tool_call_update", "toolCallId": "a", "status": "failed",
+                 "content": [["type": "content", "content": ["type": "text", "text": "Error: missing"]]]], base + 1_400),
+            row(["sessionUpdate": "retry_state", "type": "retrying", "attempt": 1, "max_retries": 15, "reason": "transport"], base + 2_000),
+            row(["sessionUpdate": "turn_completed", "stop_reason": "cancelled", "elapsed_ms": 3_000], base + 3_000),
+        ], session.appendingPathComponent("updates.jsonl"))
+        let trail = SessionAnalyzer.report(for: ref(.grok, session.path)).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["user", "tool", "retry", "error"])
+        XCTAssertEqual(trail[0].durationMs, 3_000)
+        XCTAssertEqual(trail[1].label, "read_file · /a/b.md")
+        XCTAssertTrue(trail[1].failed)
+        XCTAssertEqual(trail[1].durationMs, 400)
+        XCTAssertEqual(trail[1].tokens, 777)
+        XCTAssertTrue(trail[2].failed)
+        XCTAssertEqual(trail[3].label, "turn cancelled")
+    }
+
+    func testPiTrajectoryReadsNumericClocksAndErrors() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("pi.jsonl")
+        let base = 1_792_000_000_000
+        try writeJSONLines([
+            ["type": "session", "version": 3, "id": "s", "timestamp": "2026-10-14T17:46:39.000Z", "cwd": "/x"],
+            ["type": "model_change", "id": "m", "timestamp": "2026-10-14T17:46:39.100Z", "provider": "xai", "modelId": "grok"],
+            ["type": "message", "id": "u", "timestamp": "2026-10-14T17:46:40.000Z",
+             "message": ["role": "user", "content": [["type": "text", "text": "do it"]], "timestamp": base]],
+            ["type": "message", "id": "a", "timestamp": "2026-10-14T17:46:42.600Z", "message": [
+                "role": "assistant", "timestamp": base + 100, "duration": 2_500.0,
+                "usage": ["input": 1000, "cacheRead": 500, "output": 5],
+                "content": [
+                    ["type": "thinking", "thinking": "hm"],
+                    ["type": "toolCall", "id": "c1", "name": "bash", "arguments": ["command": "ls"], "intent": "List files"],
+                ],
+            ]],
+            ["type": "message", "id": "r", "timestamp": "2026-10-14T17:46:44.100Z", "message": [
+                "role": "toolResult", "toolCallId": "c1", "toolName": "bash", "isError": true,
+                "content": [["type": "text", "text": "boom"]], "timestamp": base + 4_100,
+            ]],
+            ["type": "message", "id": "e", "timestamp": "2026-10-14T17:46:45.000Z", "message": [
+                "role": "assistant", "timestamp": base + 5_000, "stopReason": "error",
+                "errorMessage": "rate limit", "content": [],
+            ]],
+            ["type": "compaction", "id": "k", "timestamp": "2026-10-14T17:46:46.000Z",
+             "tokensBefore": 200_000, "tokensAfter": 40_000, "method": "snapcompact", "summary": "sum"],
+        ], file)
+        let trail = SessionAnalyzer.report(for: ref(.pi, file.path)).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["notice", "user", "reasoning", "tool", "error", "compaction"])
+        XCTAssertEqual(trail[1].at, base)
+        XCTAssertEqual(trail[2].durationMs, 2_500)
+        XCTAssertEqual(trail[2].tokens, 1_500)
+        XCTAssertEqual(trail[3].label, "bash · List files")
+        XCTAssertTrue(trail[3].failed)
+        XCTAssertEqual(trail[3].durationMs, 1_500)
+        XCTAssertTrue(trail[4].failed)
+        XCTAssertEqual(trail[5].label, "snapcompact 200000 → 40000 tokens")
+    }
+
+    func testDevinTrajectoryLatencyFailuresAndMcpLabels() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("devin.json")
+        try writeJSON([
+            "agent": ["name": "devin"],
+            "steps": [
+                ["step_id": 1, "timestamp": "2026-10-20T10:00:00.000Z", "source": "user", "message": "check it"],
+                ["step_id": 2, "timestamp": "2026-10-20T10:00:04.000Z", "source": "agent", "message": "looking",
+                 "reasoning_content": "think", "metrics": ["prompt_tokens": 900, "completion_tokens": 10],
+                 "tool_calls": [
+                    ["tool_call_id": "t1", "function_name": "exec", "arguments": ["command": "false"]],
+                    ["tool_call_id": "t2", "function_name": "mcp_call_tool",
+                     "arguments": ["server_name": "figma", "tool_name": "get_file"]],
+                 ],
+                 "observation": ["results": [
+                    ["source_call_id": "t1", "content": "Output from command in shell x:\n\nExit code: 1"],
+                    ["source_call_id": "t2", "content": "ok"],
+                 ]]],
+            ],
+        ], file)
+        let trail = SessionAnalyzer.report(for: ref(.devin, file.path)).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["user", "reasoning", "assistant", "tool", "tool"])
+        XCTAssertEqual(trail[1].durationMs, 4_000)
+        XCTAssertEqual(trail[1].tokens, 900)
+        XCTAssertNil(trail[2].durationMs)
+        XCTAssertEqual(trail[3].label, "exec · false")
+        XCTAssertTrue(trail[3].failed)
+        XCTAssertEqual(trail[4].label, "mcp · figma/get_file")
+        XCTAssertFalse(trail[4].failed)
+    }
+
+    func testKiroIDETrajectoryCoversApprovalsSubagentsAndCredits() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("ide", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        func row(_ time: String, _ payload: [String: Any]) -> [String: Any] {
+            ["id": UUID().uuidString, "timestamp": "2026-10-20T10:00:\(time)Z", "payload": payload]
+        }
+        try writeJSONLines([
+            row("00.000", ["type": "user", "content": "hello"]),
+            row("01.000", ["type": "tool_call", "toolCallId": "t1", "toolName": "read_file", "args": ["path": "/a"], "status": "approved"]),
+            row("01.000", ["type": "tool_result", "toolCallId": "t1", "content": "body", "success": true]),
+            row("02.000", ["type": "pending_interaction", "toolCallId": "t2", "question": "Load skill: x"]),
+            row("05.000", ["type": "interaction_resolved", "toolCallId": "t2", "outcome": "selected", "selectedOption": "accept"]),
+            row("06.000", ["type": "sub_agent_start", "subSessionId": "s1", "subAgentName": "explore", "prompt": "find"]),
+            row("09.000", ["type": "sub_agent_complete", "subSessionId": "s1", "response": "found", "status": "success"]),
+            row("10.000", ["type": "tool_call", "toolCallId": "t3", "toolName": "execute_bash", "args": ["command": "x"], "status": "approved"]),
+            row("10.500", ["type": "tool_result", "toolCallId": "t3", "content": "nope", "success": false]),
+            row("11.000", ["type": "usage_summary", "promptTurnSummaries": [["usage": 1.5, "usedTools": ["read_file"]]],
+                           "elapsedTime": 11_000, "status": "success"]),
+            row("11.000", ["type": "turn_end", "stopReason": "error"]),
+        ], dir.appendingPathComponent("messages.jsonl"))
+        let trail = SessionAnalyzer.report(for: ref(.kiroIDE, dir.path)).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["user", "tool", "approval", "subagent", "tool", "notice", "error"])
+        XCTAssertNil(trail[1].durationMs, "same-instant call and result must not report a zero duration")
+        XCTAssertEqual(trail[2].durationMs, 3_000)
+        XCTAssertTrue(trail[2].label.hasSuffix("accept"))
+        XCTAssertEqual(trail[3].durationMs, 3_000)
+        XCTAssertEqual(trail[4].durationMs, 500)
+        XCTAssertTrue(trail[4].failed)
+        XCTAssertTrue(trail[5].label.contains("1.50 credits"))
+        XCTAssertTrue(trail[6].failed)
+    }
+
+    func testKiroCLITrajectoryUsesSidecarTurnClock() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let json = root.appendingPathComponent("cli.json")
+        let lines = root.appendingPathComponent("cli.jsonl")
+        try writeJSONLines([
+            ["version": "v1", "kind": "Prompt", "data": ["message_id": "m1", "content": [["kind": "text", "data": "start"]],
+                                                       "meta": ["timestamp": 1_790_726_400]]],
+            ["version": "v1", "kind": "AssistantMessage", "data": ["message_id": "m2", "content": [
+                ["kind": "text", "data": "ok"],
+                ["kind": "toolUse", "data": ["toolUseId": "u1", "name": "shell", "input": ["command": "ls"]]],
+            ]]],
+            ["version": "v1", "kind": "ToolResults", "data": ["message_id": "m3",
+                "content": [["kind": "toolResult", "data": ["toolUseId": "u1", "status": "error", "content": []]]],
+                "results": ["u1": ["result": ["Error": "bad"]]]]],
+        ], lines)
+        try writeJSON([
+            "session_state": [
+                "conversation_metadata": ["user_turn_metadatas": [[
+                    "message_ids": ["m1", "m2", "m3"],
+                    "end_timestamp": "2026-09-30T00:00:10Z",
+                    "turn_duration": ["secs": 10, "nanos": 0],
+                    "end_reason": "UserTurnEnd", "total_request_count": 2, "model": "auto",
+                    "metering_usage": [["value": 0.5]],
+                ]]],
+            ],
+        ], json)
+        let trail = SessionAnalyzer.report(for: ref(.kiroCLI, json.path)).trajectory
+        XCTAssertEqual(trail.map(\.kind), ["user", "assistant", "tool", "notice"])
+        XCTAssertEqual(trail[0].at, 1_790_726_400_000)
+        XCTAssertTrue(trail[2].failed)
+        XCTAssertEqual(trail[3].durationMs, 10_000)
+        let times = trail.compactMap(\.at)
+        XCTAssertEqual(times.count, trail.count)
+        XCTAssertEqual(times, times.sorted())
+    }
+
+    func testDshTrajectoryCoversRetriesJobsCompactionAndThinkTime() throws {
+        let root = try makeTemp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("session.v4.jsonl")
+        func row(_ type: String, _ time: Int, _ data: [String: Any]) -> [String: Any] {
+            ["type": type, "seq": time, "time": 1_792_000_000_000 + time, "data": data]
+        }
+        try writeJSONLines([
+            ["type": "session", "version": 4, "id": "s", "cwd": "/x", "createdAt": 1_792_000_000_000],
+            row("turn/start", 0, ["turn": 1]),
+            row("user/message", 1, ["content": [["type": "text", "text": "go"]], "source": ["kind": "user"]]),
+            row("step/start", 10, ["turn": 1, "step": 1]),
+            row("llm/retry", 500, ["retry": 1, "maxRetries": 5, "delayMs": 450.0,
+                                   "failure": ["code": "RATE_LIMIT", "message": "quota"]]),
+            row("assistant/message", 3_000, ["turn": 1, "step": 1,
+                "message": ["role": "assistant", "content": [["type": "reasoning", "text": "hmm"], ["type": "text", "text": "done"]]],
+                "usage": ["inputTokens": 100, "cacheReadTokens": 900]]),
+            row("tool/call", 3_001, ["turn": 1, "step": 1, "callId": "c", "name": "bash", "arguments": "{\"command\":\"ls\"}"]),
+            row("tool/result", 3_501, ["turn": 1, "step": 1,
+                "message": ["toolCallId": "c", "isError": true, "content": [["type": "text", "text": "x"]]]]),
+            row("job/registered", 3_600, ["jobId": "j", "label": "sleep 9", "startedAt": 1_792_000_003_600]),
+            row("job/settled", 5_600, ["jobId": "j", "status": "killed", "finishedAt": 1_792_000_005_600]),
+            row("compaction/start", 6_000, ["compactionId": "k", "turn": 1]),
+            row("compaction/summary", 7_000, ["compactionId": "k", "summary": [["type": "text", "text": "sum"]], "shadowedTokenCount": 800]),
+            row("compaction/end", 7_100, ["compactionId": "k", "turn": 1]),
+            row("turn/end", 8_000, ["turn": 1, "reason": ["kind": "aborted"]]),
+        ], file)
+        let trail = SessionAnalyzer.report(for: ref(.dsh, file.path)).trajectory
+        let kinds = trail.map(\.kind)
+        XCTAssertEqual(kinds, ["user", "retry", "reasoning", "assistant", "tool", "job", "compaction", "error"])
+        XCTAssertEqual(trail[0].durationMs, 7_999)
+        XCTAssertEqual(trail[2].durationMs, 2_990)
+        XCTAssertEqual(trail[2].tokens, 1_000)
+        XCTAssertEqual(SessionAnalyzer.report(for: ref(.dsh, file.path)).promptTokens, 1_000)
+        XCTAssertEqual(trail[4].durationMs, 500)
+        XCTAssertTrue(trail[4].failed)
+        XCTAssertTrue(trail[5].failed)
+        XCTAssertEqual(trail[5].durationMs, 2_000)
+        XCTAssertEqual(trail[6].durationMs, 1_100)
+        XCTAssertTrue(trail[6].label.contains("800"))
+        XCTAssertEqual(trail[7].label, "turn aborted")
     }
 
     private func makeTemp() throws -> URL {

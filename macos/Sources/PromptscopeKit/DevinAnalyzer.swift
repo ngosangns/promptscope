@@ -50,8 +50,11 @@ enum DevinAnalyzer {
             inTurn = false
         }
         var openPreview = ""
+        var lastUser: Int?
+        var previousSource = ""
 
         for step in steps {
+            defer { previousSource = step["source"] as? String ?? "" }
             let source = step["source"] as? String ?? ""
             let message = step["message"] as? String ?? ""
             switch source {
@@ -68,6 +71,10 @@ enum DevinAnalyzer {
                     rulesBytes = message.utf8.count
                 case .summary:
                     summaryBytes = message.utf8.count
+                    trajectory.add(
+                        at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1), kind: "compaction",
+                        label: "continued from a summary", bytes: message.utf8.count
+                    )
                 case .system:
                     standing[.system, default: 0] += message.utf8.count
                 }
@@ -77,42 +84,56 @@ enum DevinAnalyzer {
                 if inTurn { closeTurn(preview: openPreview) }
                 turnIndex += 1
                 openPreview = PromptText.preview(message, limit: 140)
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: devinMillis(step["timestamp"]), turn: turnIndex,
-                    kind: "user", label: openPreview, bytes: message.utf8.count
-                ))
+                trajectory.add(
+                    at: devinMillis(step["timestamp"]), turn: turnIndex, kind: "user", label: openPreview, bytes: message.utf8.count
+                )
                 userBytes = message.utf8.count
                 replyBytes = 0
                 inTurn = true
                 transcript[.user, default: 0] += message.utf8.count
+                lastUser = devinMillis(step["timestamp"])
             case "agent":
                 transcript[.assistant, default: 0] += message.utf8.count
                 let reasoning = step["reasoning_content"] as? String ?? ""
                 transcript[.reasoning, default: 0] += reasoning.utf8.count
                 replyBytes += message.utf8.count + reasoning.utf8.count
-                if !message.isEmpty {
-                    trajectory.append(TrajectoryEntry(
-                        index: trajectory.count, at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1),
-                        kind: "assistant", label: PromptText.preview(message, limit: 80), bytes: message.utf8.count
-                    ))
+                let at = devinMillis(step["timestamp"])
+                let metrics = step["metrics"] as? [String: Any]
+                let prompt = metrics.flatMap { jsonInt($0["prompt_tokens"]) }
+                if let prompt { promptTokens = prompt }
+                // The agent stamp is the end of the step. Only the step right after a user
+                // message has a clean model latency; later gaps also hold the previous tool run.
+                let latency: Int? = {
+                    guard let at, let lastUser, at >= lastUser, previousSource == "user" else { return nil }
+                    return at - lastUser
+                }()
+                var first = true
+                func span() -> Int? { defer { first = false }; return first ? latency : nil }
+                if !reasoning.isEmpty {
+                    trajectory.add(
+                        at: at, turn: max(turnIndex, 1), kind: "reasoning", label: "reasoning",
+                        bytes: reasoning.utf8.count, durationMs: span(), tokens: prompt
+                    )
                 }
-                if let metrics = step["metrics"] as? [String: Any], let tokens = jsonInt(metrics["prompt_tokens"]) {
-                    promptTokens = tokens
+                if !message.isEmpty {
+                    trajectory.add(
+                        at: at, turn: max(turnIndex, 1), kind: "assistant", label: PromptText.preview(message, limit: 80),
+                        bytes: message.utf8.count, durationMs: span(), tokens: prompt
+                    )
                 }
                 let calls = step["tool_calls"] as? [[String: Any]] ?? []
-                var results: [String: Int] = [:]
+                var results: [String: String] = [:]
                 if let observation = step["observation"] as? [String: Any],
                    let rows = observation["results"] as? [[String: Any]] {
                     for row in rows {
-                        let id = row["source_call_id"] as? String ?? ""
-                        let content = row["content"] as? String ?? ""
-                        results[id] = content.utf8.count
+                        results[row["source_call_id"] as? String ?? ""] = row["content"] as? String ?? ""
                     }
                 }
                 for call in calls {
                     let name = call["function_name"] as? String ?? "tool"
                     let id = call["tool_call_id"] as? String ?? ""
-                    let result = results[id] ?? 0
+                    let body = results[id] ?? ""
+                    let result = body.utf8.count
                     var row = tools[name] ?? ToolMeasure(name: name)
                     row.calls += 1
                     row.resultBytes += result
@@ -120,12 +141,19 @@ enum DevinAnalyzer {
                     transcript[.toolResult, default: 0] += result
                     replyBytes += result
                     if result > 0 { heavy.append((name, result)) }
-                    trajectory.append(TrajectoryEntry(
-                        index: trajectory.count, at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1),
-                        kind: "tool", label: name, bytes: result
-                    ))
+                    let arguments = call["arguments"] as? [String: Any]
+                    let args = arguments.flatMap { try? JSONSerialization.data(withJSONObject: $0) }?.count ?? 0
+                    let waited = body.range(of: #"No output produced after ([\d.]+) seconds"#, options: .regularExpression)
+                        .flatMap { Double(body[$0].split(separator: " ").dropFirst(4).first ?? "") }
+                    trajectory.add(
+                        at: at, turn: max(turnIndex, 1),
+                        kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                        label: devinLabel(name, arguments), bytes: args + result,
+                        durationMs: waited.map { Int($0 * 1000) }, failed: TrailLabel.looksFailed(body), tokens: prompt
+                    )
                     noteSkill(call, name: name, skills: &skills)
                 }
+                if previousSource != "user" { lastUser = nil }
             default:
                 transcript[.other, default: 0] += message.utf8.count
             }
@@ -284,9 +312,19 @@ private func pack(_ map: [SliceKind: Int]) -> [Slice] {
     }
 }
 
-private func devinMillis(_ value: Any?) -> Int? {
-    guard let text = value as? String, let date = Dates.parse(text) else { return nil }
-    return Int(date.timeIntervalSince1970 * 1000)
+private func devinMillis(_ value: Any?) -> Int? { Clock.millis(value) }
+
+private func devinLabel(_ name: String, _ arguments: [String: Any]?) -> String {
+    guard let arguments else { return name }
+    if name == "mcp_call_tool" {
+        let server = arguments["server_name"] as? String ?? "?"
+        let tool = arguments["tool_name"] as? String ?? "?"
+        return "mcp · \(server)/\(tool)"
+    }
+    if name == "run_subagent" {
+        return "subagent · " + PromptText.preview(arguments["title"] as? String ?? arguments["task"] as? String ?? "", limit: 60)
+    }
+    return TrailLabel.tool(name, arguments)
 }
 
 private func jsonInt(_ value: Any?) -> Int? {

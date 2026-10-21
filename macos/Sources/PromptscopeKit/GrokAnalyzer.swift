@@ -4,9 +4,15 @@ import Foundation
 /// and MCP server blurbs are not in that file: they arrive as synthetic
 /// `system_reminder` messages at the start of `chat_history.jsonl`. Built-in
 /// tool schemas live in `tool_definitions.json`. MCP tool schemas are not inlined.
+///
+/// The trajectory comes from `updates.jsonl`, the ACP stream Grok writes while it
+/// works. It is the only Grok file with wall-clock times, so it carries the
+/// timeline. A session without that stream falls back to `chat_history.jsonl`,
+/// which has the same events in order but no clock.
 enum GrokAnalyzer {
     static let digestCap = 512 * 1024
     static let reportCap = 48 * 1024 * 1024
+    static let updatesCap = 256 * 1024 * 1024
 
     public static func digest(_ ref: SessionRef) -> SessionDigest {
         analyze(ref, full: false).digest()
@@ -48,6 +54,9 @@ enum GrokAnalyzer {
         var heavy: [(String, Int)] = []
         var turnUser = 0
         var turnReply = 0
+        // Fallback trajectory, built from the chat history when updates.jsonl has none.
+        var chatTrail: [TrajectoryEntry] = []
+        var chatTrailTool: [String: Int] = [:]
 
         func add(_ kind: SliceKind, _ bytes: Int) {
             guard bytes > 0 else { return }
@@ -84,6 +93,12 @@ enum GrokAnalyzer {
             if type == "reasoning" {
                 let stored = encryptedBytes(object)
                 add(.reasoning, stored > 0 ? stored : textBytes)
+                if full {
+                    chatTrail.append(TrajectoryEntry(
+                        index: chatTrail.count, at: nil, turn: max(turns.count, 1),
+                        kind: "reasoning", label: "reasoning", bytes: stored > 0 ? stored : textBytes
+                    ))
+                }
                 if currentTurn != nil {
                     turnReply += stored > 0 ? stored : textBytes
                 }
@@ -92,12 +107,25 @@ enum GrokAnalyzer {
             if type == "assistant" {
                 add(.assistant, textBytes)
                 turnReply += textBytes
+                if full, textBytes > 0 {
+                    chatTrail.append(TrajectoryEntry(
+                        index: chatTrail.count, at: nil, turn: max(turns.count, 1),
+                        kind: "assistant", label: PromptText.preview(text, limit: 80), bytes: textBytes
+                    ))
+                }
                 if let calls = object["tool_calls"] as? [[String: Any]] {
                     for call in calls {
                         let id = call["id"] as? String ?? ""
                         let name = call["name"] as? String ?? "tool"
                         if !id.isEmpty { callNames[id] = name }
                         let arguments = call["arguments"] as? String ?? ""
+                        if full {
+                            if !id.isEmpty { chatTrailTool[id] = chatTrail.count }
+                            chatTrail.append(TrajectoryEntry(
+                                index: chatTrail.count, at: nil, turn: max(turns.count, 1),
+                                kind: "tool", label: name, bytes: arguments.utf8.count
+                            ))
+                        }
                         noteTool(&tools, name: name, call: true, resultBytes: 0)
                         noteSkillReads(&skills, arguments: arguments)
                     }
@@ -109,6 +137,9 @@ enum GrokAnalyzer {
                 turnReply += textBytes
                 let id = object["tool_call_id"] as? String ?? ""
                 let name = callNames[id] ?? "tool"
+                if full, let at = chatTrailTool[id], at < chatTrail.count {
+                    chatTrail[at].bytes += textBytes
+                }
                 noteTool(&tools, name: name, call: false, resultBytes: textBytes)
                 considerHeavy(&heavy, tool: name, bytes: textBytes)
                 return true
@@ -149,6 +180,12 @@ enum GrokAnalyzer {
                 turnUser = textBytes
                 turnReply = 0
                 add(.user, textBytes)
+                if full {
+                    chatTrail.append(TrajectoryEntry(
+                        index: chatTrail.count, at: nil, turn: index + 1,
+                        kind: "user", label: PromptText.preview(query, limit: 80), bytes: textBytes
+                    ))
+                }
                 sawQuery = true
                 return full
             }
@@ -167,6 +204,21 @@ enum GrokAnalyzer {
         }
 
         closeTurn()
+
+        var trajectory: [TrajectoryEntry] = []
+        if full {
+            let streamed = streamTrajectory(root.appendingPathComponent("updates.jsonl"))
+            trajectory = streamed.entries
+            if streamed.truncated {
+                notes.append("updates.jsonl is longer than \(ByteFormat.bytes(updatesCap)); the timeline stops there.")
+            }
+            if trajectory.isEmpty {
+                trajectory = chatTrail
+                if !trajectory.isEmpty {
+                    notes.append("No updates.jsonl stream with events. The trajectory comes from chat_history.jsonl and has no clock.")
+                }
+            }
+        }
 
         mergeEvents(root.appendingPathComponent("events.jsonl"), into: &mcp)
 
@@ -216,6 +268,7 @@ enum GrokAnalyzer {
             mcp: mcp.sorted { $0.catalogBytes > $1.catalogBytes },
             tools: rankedTools,
             turns: turns,
+            trajectory: trajectory,
             heavy: heavyRanked,
             steering: [],
             contextPercent: nil,
@@ -224,6 +277,147 @@ enum GrokAnalyzer {
             truncated: truncated && full
         )
     }
+}
+
+/// Replays the ACP stream in `updates.jsonl`. Message and thought chunks of one
+/// reply merge into a single span; a tool call opens an entry that its
+/// completed or failed update closes with the duration and the output size.
+/// Hook, background-task, and recap rows carry no prompt, so they are skipped
+/// before the JSON parse (the file can be ~100 MB).
+private func streamTrajectory(_ url: URL) -> (entries: [TrajectoryEntry], truncated: Bool) {
+    guard Files.size(url) > 0 else { return ([], false) }
+    var entries: [TrajectoryEntry] = []
+    var open: [String: Int] = [:]
+    var turn = 0
+    var lastChunk: (kind: String, index: Int)?
+    var compactionAt: Int?
+    var promptTokens: Int?
+
+    func chunk(_ kind: String, _ text: String, at: Int?) {
+        guard !text.isEmpty else { return }
+        if let last = lastChunk, last.kind == kind, last.index < entries.count {
+            entries[last.index].bytes += text.utf8.count
+            entries.close(last.index, at: at)
+            return
+        }
+        lastChunk = (kind, entries.count)
+        entries.add(
+            at: at, turn: max(turn, 1), kind: kind,
+            label: kind == "reasoning" ? "reasoning" : PromptText.preview(text, limit: 80),
+            bytes: text.utf8.count, tokens: promptTokens
+        )
+    }
+
+    let wanted = [
+        "user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call\"",
+        "auto_compact_", "retry_state", "turn_completed",
+    ]
+    let truncated = Files.forEachLine(url: url, maxBytes: GrokAnalyzer.updatesCap) { line in
+        // Hook, background-task, and plan rows are most of a long file. Skip them before the parse.
+        let marked = wanted.contains { line.contains("\"sessionUpdate\":\"\($0)") }
+        let finished = line.contains("\"sessionUpdate\":\"tool_call_update\"")
+            && (line.contains("\"status\":\"completed\"") || line.contains("\"status\":\"failed\""))
+        guard marked || finished, let object = JSONFile.lineObject(line),
+              let params = object["params"] as? [String: Any],
+              let update = params["update"] as? [String: Any],
+              let kind = update["sessionUpdate"] as? String else { return true }
+        let meta = params["_meta"] as? [String: Any]
+        let at = Clock.millis(meta?["agentTimestampMs"]) ?? Clock.millis(object["timestamp"])
+        if let used = grokInt(meta?["totalTokens"]), used > 0 { promptTokens = used }
+        let content = update["content"] as? [String: Any]
+        let text = content?["text"] as? String ?? ""
+
+        switch kind {
+        case "user_message_chunk":
+            let index = grokInt((update["_meta"] as? [String: Any])?["promptIndex"])
+            if let last = lastChunk, last.kind == "user", last.index < entries.count,
+               index == nil || index.map({ $0 + 1 }) == entries[last.index].turn {
+                entries[last.index].bytes += text.utf8.count
+                return true
+            }
+            turn = index.map { $0 + 1 } ?? turn + 1
+            lastChunk = ("user", entries.count)
+            entries.add(at: at, turn: turn, kind: "user", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count)
+        case "agent_message_chunk":
+            chunk("assistant", text, at: at)
+        case "agent_thought_chunk":
+            chunk("reasoning", text, at: at)
+        case "tool_call":
+            lastChunk = nil
+            let tool = (update["_meta"] as? [String: Any])?["x.ai/tool"] as? [String: Any]
+            let title = update["title"] as? String ?? "tool"
+            let name = (tool?["name"] as? String)
+                ?? title.split(separator: ":").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? title
+            let id = update["toolCallId"] as? String ?? ""
+            let input = update["rawInput"]
+            let size = input.flatMap { try? JSONSerialization.data(withJSONObject: $0) }?.count ?? 0
+            let called = entries.add(
+                at: at, turn: max(turn, 1), kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                label: TrailLabel.tool(name, tool?["input"] ?? input), bytes: size, tokens: promptTokens
+            )
+            if !id.isEmpty { open[id] = called }
+        case "tool_call_update":
+            let id = update["toolCallId"] as? String ?? ""
+            guard let index = open[id], index < entries.count else { break }
+            open[id] = nil
+            var output = 0
+            if let parts = update["content"] as? [[String: Any]] {
+                output = parts.reduce(0) { total, part in
+                    total + ((part["content"] as? [String: Any])?["text"] as? String ?? "").utf8.count
+                }
+            }
+            if output == 0, let raw = update["rawOutput"],
+               let data = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]) {
+                output = data.count
+            }
+            let failed = update["status"] as? String == "failed"
+            entries.close(index, at: at, bytes: output, failed: failed)
+        case "auto_compact_started":
+            lastChunk = nil
+            let used = grokInt(update["tokens_used"])
+            compactionAt = entries.add(
+                at: at, turn: max(turn, 1), kind: "compaction",
+                label: used.map { "compaction at \($0) tokens" } ?? "compaction started", tokens: used
+            )
+        case "auto_compact_completed":
+            if let index = compactionAt, index < entries.count {
+                if let before = grokInt(update["tokens_before"]), let after = grokInt(update["tokens_after"]) {
+                    entries[index].label = "compaction \(before) → \(after) tokens"
+                }
+                if let ms = grokInt(update["elapsed_ms"]) { entries[index].durationMs = ms }
+            }
+            compactionAt = nil
+            promptTokens = grokInt(update["tokens_after"]) ?? promptTokens
+        case "retry_state":
+            lastChunk = nil
+            let attempt = grokInt(update["attempt"]).map { " \($0)/\(grokInt(update["max_retries"]) ?? 0)" } ?? ""
+            entries.add(
+                at: at, turn: max(turn, 1), kind: "retry",
+                label: "retry\(attempt) · " + PromptText.preview(update["reason"] as? String ?? "", limit: 60), failed: true
+            )
+        case "turn_completed":
+            lastChunk = nil
+            let reason = update["stop_reason"] as? String ?? "end_turn"
+            if let index = entries.lastIndex(where: { $0.kind == "user" && $0.turn == max(turn, 1) }),
+               let ms = grokInt(update["elapsed_ms"]), entries[index].durationMs == nil {
+                entries[index].durationMs = ms
+            }
+            if reason != "end_turn" {
+                entries.add(at: at, turn: max(turn, 1), kind: "error", label: "turn \(reason)", failed: true)
+            }
+        default:
+            break
+        }
+        return true
+    }
+    return (entries, truncated)
+}
+
+private func grokInt(_ value: Any?) -> Int? {
+    if let number = value as? Int { return number }
+    if let number = value as? Double { return Int(number) }
+    if let number = value as? NSNumber { return number.intValue }
+    return nil
 }
 
 private func compact(_ slices: [Slice]) -> [Slice] {

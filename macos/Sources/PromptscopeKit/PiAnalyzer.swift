@@ -47,6 +47,8 @@ private struct Accumulator {
     var nonMessageTokens: Int?
     var sawSections = false
     var truncated = false
+    private var callEntries: [String: Int] = [:]
+    private var toolStarts: [String: Int] = [:]
     private var turnIndex = 0
     private var turnPreview = ""
     private var userBytes = 0
@@ -60,7 +62,10 @@ private struct Accumulator {
     }
 
     mutating func consume(_ object: [String: Any]) {
-        guard object["type"] as? String == "message" else { return }
+        guard object["type"] as? String == "message" else {
+            consumeEvent(object)
+            return
+        }
         guard let message = object["message"] as? [String: Any] else { return }
         let role = message["role"] as? String ?? ""
         if role == "system", message["sections"] is [String: Any] {
@@ -73,31 +78,32 @@ private struct Accumulator {
             let text = contentText(message["content"])
             turnIndex += 1
             turnPreview = PromptText.preview(text, limit: 140)
-            trajectory.append(TrajectoryEntry(
-                index: trajectory.count, at: piMillis(object["timestamp"]), turn: turnIndex,
+            trajectory.add(
+                at: Clock.millis(message["timestamp"]) ?? Clock.millis(object["timestamp"]), turn: turnIndex,
                 kind: "user", label: turnPreview, bytes: text.utf8.count
-            ))
+            )
             userBytes = text.utf8.count
             replyBytes = 0
             inTurn = true
             add(.user, text.utf8.count, standing: false)
         case "assistant":
-            consumeAssistant(message)
+            consumeAssistant(message, object)
         case "toolResult":
             let text = contentText(message["content"])
             let name = message["toolName"] as? String ?? "tool"
             add(.toolResult, text.utf8.count, standing: false)
             noteTool(name, call: false, result: text.utf8.count)
             heavy.append((name, text.utf8.count))
-            let at = piMillis(message["timestamp"]) ?? piMillis(object["timestamp"])
-            if let index = trajectory.lastIndex(where: { $0.kind == "tool" && $0.label == name && $0.durationMs == nil }),
-               let start = trajectory[index].at, let at, at >= start {
-                trajectory[index].durationMs = at - start
-                trajectory[index].bytes += text.utf8.count
+            let at = Clock.millis(message["timestamp"]) ?? Clock.millis(object["timestamp"])
+            let failed = message["isError"] as? Bool ?? false
+            let id = message["toolCallId"] as? String ?? ""
+            if let index = callEntries[id] {
+                trajectory.close(index, at: at, bytes: text.utf8.count, failed: failed)
+                callEntries[id] = nil
             } else {
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: at, turn: turnIndex, kind: "tool", label: name, bytes: text.utf8.count
-                ))
+                trajectory.add(
+                    at: at, turn: turnIndex, kind: "tool", label: name, bytes: text.utf8.count, failed: failed
+                )
             }
             replyBytes += text.utf8.count
         default:
@@ -199,8 +205,18 @@ private struct Accumulator {
         self.sections = listed
     }
 
-    private mutating func consumeAssistant(_ message: [String: Any]) {
+    private mutating func consumeAssistant(_ message: [String: Any], _ object: [String: Any]) {
         let parts = message["content"] as? [Any] ?? []
+        // Pi stamps the message with the request start and the entry with the end.
+        // OMP records the span itself: `duration`, `ttft`, `completedAt`.
+        let started = Clock.millis(message["timestamp"])
+        let finished = Clock.millis(message["completedAt"]) ?? Clock.millis(object["timestamp"])
+        let span = jsonDouble(message["duration"]).map { Int($0) }
+            ?? { if let started, let finished, finished >= started { return finished - started } else { return nil } }()
+        let usage = message["usage"] as? [String: Any]
+        let prompt = usage.map { (jsonInt($0["input"]) ?? 0) + (jsonInt($0["cacheRead"]) ?? 0) }.flatMap { $0 > 0 ? $0 : nil }
+        var first = true
+        func lead() -> Int? { defer { first = false }; return first ? span : nil }
         for part in parts {
             guard let item = part as? [String: Any] else { continue }
             switch item["type"] as? String {
@@ -208,30 +224,125 @@ private struct Accumulator {
                 let text = item["text"] as? String ?? ""
                 add(.assistant, text.utf8.count, standing: false)
                 replyBytes += text.utf8.count
+                if !text.isEmpty {
+                    trajectory.add(
+                        at: started ?? finished, turn: turnIndex, kind: "assistant",
+                        label: PromptText.preview(text, limit: 80), bytes: text.utf8.count, durationMs: lead(), tokens: prompt
+                    )
+                }
             case "thinking":
                 let text = item["thinking"] as? String ?? item["text"] as? String ?? ""
                 add(.reasoning, text.utf8.count, standing: false)
                 replyBytes += text.utf8.count
+                if !text.isEmpty {
+                    trajectory.add(
+                        at: started ?? finished, turn: turnIndex, kind: "reasoning", label: "reasoning",
+                        bytes: text.utf8.count, durationMs: lead(), tokens: prompt
+                    )
+                }
             case "toolCall":
                 let name = item["name"] as? String ?? "tool"
                 let args = argumentText(item["arguments"])
                 noteTool(name, call: true, result: 0)
                 noteSkillUse(name: name, arguments: item["arguments"], text: args)
-                trajectory.append(TrajectoryEntry(
-                    index: trajectory.count, at: piMillis(message["timestamp"]), turn: turnIndex,
-                    kind: "tool", label: name, bytes: args.utf8.count
-                ))
+                let id = item["id"] as? String ?? ""
+                let index = trajectory.add(
+                    at: toolStarts[id] ?? finished ?? started, turn: turnIndex,
+                    kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
+                    label: TrailLabel.tool(name, item["arguments"], intent: item["intent"] as? String),
+                    bytes: args.utf8.count, tokens: prompt
+                )
+                if !id.isEmpty { callEntries[id] = index }
             default:
                 break
             }
         }
         noteUsage(message)
-        let text = contentText(message["content"])
-        if !text.isEmpty {
-            trajectory.append(TrajectoryEntry(
-                index: trajectory.count, at: piMillis(message["timestamp"]), turn: turnIndex,
-                kind: "assistant", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
-            ))
+        let stop = message["stopReason"] as? String ?? ""
+        if stop == "error" || stop == "aborted" || stop == "length" {
+            let reason = message["errorMessage"] as? String ?? stop
+            trajectory.add(
+                at: finished ?? started, turn: max(turnIndex, 1), kind: "error",
+                label: stop == "error" ? "request failed · " + PromptText.preview(reason, limit: 70) : "reply \(stop)",
+                durationMs: first ? span : nil, failed: true
+            )
+        }
+    }
+
+    /// Entries that are not chat messages: compactions, model and mode changes,
+    /// the injected reminders, background-job notices, and how the session ended.
+    private mutating func consumeEvent(_ object: [String: Any]) {
+        let type = object["type"] as? String ?? ""
+        let at = Clock.millis(object["timestamp"])
+        let turn = max(turnIndex, 1)
+        switch type {
+        case "compaction":
+            let before = jsonInt(object["tokensBefore"])
+            let after = jsonInt(object["tokensAfter"])
+            let method = object["method"] as? String ?? "compaction"
+            let range = (before != nil && after != nil) ? " \(before!) → \(after!) tokens" : ""
+            trajectory.add(
+                at: at, turn: turn, kind: "compaction", label: "\(method)\(range)",
+                bytes: (object["summary"] as? String ?? "").utf8.count, tokens: before
+            )
+        case "model_change":
+            let model = object["model"] as? String
+                ?? [object["provider"] as? String, object["modelId"] as? String].compactMap { $0 }.joined(separator: "/")
+            if !model.isEmpty { trajectory.add(at: at, turn: turn, kind: "notice", label: "model → \(model)") }
+        case "mode_change":
+            if let mode = object["mode"] as? String { trajectory.add(at: at, turn: turn, kind: "notice", label: "mode → \(mode)") }
+        case "ttsr_injection":
+            let rules = (object["injectedRules"] as? [String] ?? []).joined(separator: ", ")
+            trajectory.add(at: at, turn: turn, kind: "notice", label: "rules injected · \(PromptText.preview(rules, limit: 60))")
+        case "custom":
+            let data = object["data"] as? [String: Any]
+            switch object["customType"] as? String {
+            case "tool_execution_start":
+                if let id = data?["toolCallId"] as? String, let started = Clock.millis(data?["startedAt"]) {
+                    toolStarts[id] = started
+                }
+            case "session_exit":
+                let reason = data?["reason"] as? String ?? "exit"
+                trajectory.add(
+                    at: Clock.millis(data?["recordedAt"]) ?? at, turn: turn, kind: "error",
+                    label: "session ended · \(reason)", failed: data?["kind"] as? String == "signal"
+                )
+            case "goal-completed":
+                let used = jsonInt(data?["tokensUsed"]).map { " · \($0) tokens" } ?? ""
+                trajectory.add(
+                    at: at, turn: turn, kind: "notice", label: "goal completed\(used)",
+                    durationMs: jsonInt(data?["timeUsedSeconds"]).map { $0 * 1000 }
+                )
+            default:
+                break
+            }
+        case "custom_message":
+            let kind = object["customType"] as? String ?? "message"
+            let details = object["details"] as? [String: Any]
+            let ignored: Set<String> = ["image-attachment", "goal-mode-context", "firstmate-sessionstart-nudge"]
+            guard !ignored.contains(kind) else { break }
+            let size = (object["content"] as? String ?? "").utf8.count
+            var label = kind
+            var duration: Int?
+            var failed = false
+            switch kind {
+            case "skill-prompt":
+                label = "skill invoked · " + (details?["name"] as? String ?? "?")
+            case "async-result":
+                let job = (details?["jobs"] as? [[String: Any]])?.first
+                label = "background job done · " + PromptText.preview(job?["label"] as? String ?? "", limit: 50)
+                duration = jsonInt(job?["durationMs"])
+            case "irc:incoming":
+                label = "message from agent " + (details?["from"] as? String ?? "?")
+            case "thinking-loop-redirect", "tool-call-loop-redirect", "todo-error-reminder", "interrupted-thinking":
+                label = "guard · \(kind)"
+                failed = true
+            default:
+                break
+            }
+            trajectory.add(at: at, turn: turn, kind: "notice", label: label, bytes: size, durationMs: duration, failed: failed)
+        default:
+            break
         }
     }
 
@@ -429,10 +540,6 @@ private func argumentText(_ arguments: Any?) -> String {
     return PromptText.normalizeSlashes(String(decoding: data, as: UTF8.self))
 }
 
-private func piMillis(_ value: Any?) -> Int? {
-    guard let text = value as? String, let date = Dates.parse(text) else { return nil }
-    return Int(date.timeIntervalSince1970 * 1000)
-}
 
 private func jsonInt(_ value: Any?) -> Int? {
     if let number = value as? Int { return number }
