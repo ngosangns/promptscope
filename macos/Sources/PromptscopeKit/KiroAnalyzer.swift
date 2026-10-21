@@ -4,8 +4,8 @@ enum KiroIDEAnalyzer {
     public static func report(_ ref: SessionRef) -> SessionReport {
         let root = URL(fileURLWithPath: ref.locator, isDirectory: true)
         var notes = [
-            "Kiro không ghi system prompt đầy đủ vào session. Prompt đứng ở đây là các file steering được nhét vào context.",
-            "Catalog skill không nằm trong log. Bảng skill là các SKILL.md agent đã đọc.",
+            "Kiro does not record the full system prompt in the session. The standing prompt here is the steering files placed into context.",
+            "The skill catalog is not in the log. The skill table lists the SKILL.md files the agent read.",
         ]
         var transcript: [SliceKind: Int] = [:]
         var tools: [String: ToolMeasure] = [:]
@@ -104,13 +104,13 @@ enum KiroIDEAnalyzer {
             turns[index] = TurnMeasure(index: index + 1, preview: turns[index].preview, userBytes: turnUser, replyBytes: turnReply)
         }
         if truncated {
-            notes.append("Transcript dài hơn giới hạn đọc.")
+            notes.append("The transcript is longer than the read limit.")
         }
         if credits > 0 {
-            notes.append(String(format: "Kiro ghi %.2f credits cho các lượt đã chốt.", credits))
+            notes.append(String(format: "Kiro recorded %.2f credits for the completed turns.", credits))
         }
         if let contextPercent {
-            notes.append(String(format: "Context usage lần cuối: %.1f%%.", contextPercent))
+            notes.append(String(format: "Last context usage: %.1f%%.", contextPercent))
         }
 
         let steeringBytes = steering.reduce(0) { $0 + $1.bytes }
@@ -141,7 +141,7 @@ enum KiroCLIAnalyzer {
     public static func report(_ ref: SessionRef) -> SessionReport {
         let jsonURL = URL(fileURLWithPath: ref.locator)
         let jsonlURL = jsonURL.deletingPathExtension().appendingPathExtension("jsonl")
-        var notes = ["Kiro CLI không lưu system prompt trong transcript. Context % lấy từ sidecar JSON nếu có."]
+        var notes = ["Kiro CLI does not store the system prompt in the transcript. Context % comes from the sidecar JSON when present."]
         var contextPercent = ref.contextPercent
         var contextWindow: Int?
         if let object = JSONFile.object(url: jsonURL) {
@@ -151,7 +151,7 @@ enum KiroCLIAnalyzer {
         }
         if let contextPercent, let contextWindow {
             let used = Int((contextPercent / 100) * Double(contextWindow))
-            notes.append("Context ghi nhận khoảng \(used) / \(contextWindow) token (\(String(format: "%.1f", contextPercent))%).")
+            notes.append("Recorded context is about \(used) / \(contextWindow) tokens (\(String(format: "%.1f", contextPercent))%).")
         }
 
         var transcript: [SliceKind: Int] = [:]
@@ -224,8 +224,8 @@ enum KiroCLIAnalyzer {
             }
             return true
         }
-        if truncated { notes.append("Transcript dài hơn giới hạn đọc.") }
-        notes.append("Token ước lượng byte/4 chỉ dùng khi sidecar không có context window.")
+        if truncated { notes.append("The transcript is longer than the read limit.") }
+        notes.append("The byte/4 token estimate is used only when the sidecar has no context window.")
 
         return SessionReport(
             ref: ref,
@@ -288,7 +288,7 @@ private func absorbSkills(_ text: String, into skills: inout [String: SkillMeasu
             skills[name] = SkillMeasure(
                 name: name,
                 catalogBytes: 0,
-                summary: "Đọc từ tool.",
+                summary: "Read from a tool.",
                 path: path,
                 origin: "project",
                 diskBytes: SkillFiles.diskBytes(path),

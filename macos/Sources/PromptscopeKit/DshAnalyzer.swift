@@ -9,7 +9,7 @@ enum DshAnalyzer {
     static func report(_ ref: SessionRef) -> SessionReport {
         let url = URL(fileURLWithPath: ref.locator)
         guard let text = DshLog.text(url: url) else {
-            return empty(ref, note: "Không giải nén được log DSH.")
+            return empty(ref, note: "Could not decompress the DSH log.")
         }
         return analyze(ref, text: text)
     }
@@ -162,7 +162,7 @@ enum DshAnalyzer {
             case "compaction/start":
                 trajectory.append(TrajectoryEntry(
                     index: trajectory.count, at: dshMillis(object["time"]), turn: currentTurn,
-                    kind: "compaction", label: "bắt đầu nén", bytes: 0
+                    kind: "compaction", label: "compaction started", bytes: 0
                 ))
             case "compaction/prune":
                 prunedRanges += 1
@@ -178,18 +178,18 @@ enum DshAnalyzer {
         if snapshotBytes > 0 { standing[.other] = snapshotBytes }
 
         var notes = [
-            "Prompt đứng là system prompt đã render, cộng luật, catalog skill và snapshot runtime. Schema tool lấy từ request/header mới nhất.",
-            "Token đầu vào là inputTokens của lượt assistant cuối, không phải byte/4.",
-            "DSH không ghi đường dẫn SKILL.md, nên không có kích thước đĩa hay số lần đọc.",
+            "The standing prompt is the rendered system prompt plus rules, skill catalog and runtime snapshot. The tool schema comes from the latest request/header.",
+            "Input tokens are inputTokens of the last assistant turn, not byte/4.",
+            "DSH does not record SKILL.md paths, so there is no disk size or read count.",
         ]
         if !sawTurn {
-            notes.append("Log không có turn nào.")
+            notes.append("The log has no turns.")
         }
         if let version, version != 4 {
-            notes.append("Log phiên bản \(version) chưa được đọc. Chỉ v4.")
+            notes.append("Log version \(version) is not read. Only v4.")
         }
         if prunedRanges > 0 {
-            notes.append("Compaction đã che \(prunedRanges) đoạn, \(prunedTokens) token ước lượng của harness.")
+            notes.append("Compaction hid \(prunedRanges) ranges, \(prunedTokens) tokens estimated by the harness.")
         }
         var reportRef = ref
         if let model, reportRef.model == nil { reportRef.model = model }

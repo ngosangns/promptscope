@@ -42,14 +42,14 @@ public enum SliceKind: String, Codable, Sendable, CaseIterable {
         case .system: "System prompt"
         case .skills: "Skill"
         case .mcp: "MCP"
-        case .rules: "Luật & user info"
-        case .toolDefs: "Định nghĩa tool"
+        case .rules: "Rules & user info"
+        case .toolDefs: "Tool definitions"
         case .user: "User"
         case .assistant: "Assistant"
-        case .toolResult: "Kết quả tool"
-        case .reasoning: "Reasoning đã lưu"
+        case .toolResult: "Tool results"
+        case .reasoning: "Saved reasoning"
         case .steering: "Steering"
-        case .other: "Khác"
+        case .other: "Other"
         }
     }
 }
@@ -444,7 +444,7 @@ public enum ReportText {
         if let agent = ref.agent { meta.append(agent) }
         if !meta.isEmpty { lines.append(meta.joined(separator: "  ")) }
         lines.append("")
-        lines.append("Prompt đứng  \(ByteFormat.tokens(report.standingBytes)) token ước lượng (byte/4)")
+        lines.append("Standing prompt  \(ByteFormat.tokens(report.standingBytes)) estimated tokens (byte/4)")
         for slice in report.standing where slice.bytes > 0 {
             lines.append("  \(slice.kind.label)  \(ByteFormat.tokens(slice.bytes))  \(ByteFormat.percent(slice.bytes, report.standingBytes))")
         }
@@ -459,8 +459,8 @@ public enum ReportText {
             lines.append("")
             lines.append("Skill trong prompt")
             for skill in report.skills {
-                let disk = skill.diskBytes.map { "đĩa \(ByteFormat.tokens($0))" } ?? "không thấy file"
-                lines.append("  \(skill.name)  catalog \(ByteFormat.tokens(skill.catalogBytes))  \(disk)  đọc \(skill.readCount)  \(skill.origin)")
+                let disk = skill.diskBytes.map { "disk \(ByteFormat.tokens($0))" } ?? "file not found"
+                lines.append("  \(skill.name)  catalog \(ByteFormat.tokens(skill.catalogBytes))  \(disk)  reads \(skill.readCount)  \(skill.origin)")
             }
         }
         if !report.mcp.isEmpty {
@@ -475,7 +475,7 @@ public enum ReportText {
             lines.append("")
             lines.append("Tool")
             for tool in report.tools.prefix(20) {
-                lines.append("  \(tool.name)  def \(ByteFormat.tokens(tool.definitionBytes))  gọi \(tool.calls)  kết quả \(ByteFormat.tokens(tool.resultBytes))")
+                lines.append("  \(tool.name)  def \(ByteFormat.tokens(tool.definitionBytes))  calls \(tool.calls)  results \(ByteFormat.tokens(tool.resultBytes))")
             }
         }
         if !report.trajectory.isEmpty {
@@ -496,7 +496,7 @@ public enum ReportText {
                 shown += 1
             }
             let rest = report.trajectory.count - shown
-            if rest > 0 { lines.append("  … \(rest) dòng nữa") }
+            if rest > 0 { lines.append("  … \(rest) more lines") }
         }
         if !report.steering.isEmpty {
             lines.append("")
@@ -508,10 +508,10 @@ public enum ReportText {
         if let pct = report.contextPercent {
             let window = report.contextWindow.map { " / \($0) token" } ?? ""
             lines.append("")
-            lines.append(String(format: "Context đã ghi: %.1f%%%@", pct, window))
+            lines.append(String(format: "Recorded context: %.1f%%%@", pct, window))
         }
         if let tokens = report.promptTokens {
-            lines.append("Token đầu vào đã ghi: \(tokens)")
+            lines.append("Recorded input tokens: \(tokens)")
         }
         if !report.notes.isEmpty {
             lines.append("")

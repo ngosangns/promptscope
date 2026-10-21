@@ -128,16 +128,16 @@ private struct Accumulator {
 
     func report(_ ref: SessionRef) -> SessionReport {
         var notes = [
-            "Token ghi ~ là byte/4. Token đầu vào, nếu có, là usage của message assistant cuối (input + cache đọc).",
+            "Tokens marked ~ are byte/4. Input tokens, when present, come from the usage of the last assistant message (input + cache read).",
         ]
         if source == .omp && !sawSections {
-            notes.append("OMP không lưu nội dung system prompt, chỉ lưu system-prompt-digest. Catalog skill và MCP không có trong file này.")
+            notes.append("OMP does not store the system prompt text, only system-prompt-digest. The skill catalog and MCP are not in this file.")
         }
         if let nonMessageTokens {
-            notes.append("Token ngoài message ở lần cuối: \(nonMessageTokens).")
+            notes.append("Non-message tokens at the last turn: \(nonMessageTokens).")
         }
         if truncated {
-            notes.append("File dài hơn phần đã đọc. Mở phiên để đọc tiếp.")
+            notes.append("The file is longer than the part that was read. Open the session to read more.")
         }
         let heavyRanked = heavy.sorted { $0.bytes > $1.bytes }.prefix(8).enumerated().map { index, item in
             HeavyResult(rank: index + 1, tool: item.tool, bytes: item.bytes)
@@ -292,7 +292,7 @@ private struct Accumulator {
         }
         for (name, count) in reads where count > 0 {
             merged.append(SkillMeasure(
-                name: name, catalogBytes: 0, summary: "", path: nil, origin: "không rõ", readCount: count
+                name: name, catalogBytes: 0, summary: "", path: nil, origin: "unknown", readCount: count
             ))
         }
         skills = merged

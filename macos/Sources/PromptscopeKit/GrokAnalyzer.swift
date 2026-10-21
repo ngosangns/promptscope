@@ -29,7 +29,7 @@ enum GrokAnalyzer {
         var tools = toolDefinitions(root.appendingPathComponent("tool_definitions.json"))
         let toolDefBytes = tools.reduce(0) { $0 + $1.definitionBytes }
         if tools.isEmpty, Files.size(root.appendingPathComponent("tool_definitions.json")) > 0 {
-            notes.append("Không đọc được tool_definitions.json.")
+            notes.append("Could not read tool_definitions.json.")
         }
 
         var skills: [SkillMeasure] = []
@@ -171,21 +171,21 @@ enum GrokAnalyzer {
         mergeEvents(root.appendingPathComponent("events.jsonl"), into: &mcp)
 
         if systemText.isEmpty {
-            notes.append("Session không có system_prompt.txt.")
+            notes.append("The session has no system_prompt.txt.")
         }
         if skills.isEmpty {
-            notes.append("Không thấy catalog skill trong phần đầu chat history.")
+            notes.append("No skill catalog found at the start of the chat history.")
         }
         if sawCompaction {
-            notes.append("Session đã compaction. Transcript trên đĩa lớn hơn context còn lại.")
+            notes.append("The session was compacted. The transcript on disk is larger than the remaining context.")
         }
         if truncated {
             notes.append(full
-                ? "Transcript dài hơn \(ByteFormat.bytes(reportCap)); phần sau chưa tính."
-                : "Đo nhanh chỉ đọc \(ByteFormat.bytes(digestCap)) đầu transcript.")
+                ? "The transcript is longer than \(ByteFormat.bytes(reportCap)); the rest is not counted."
+                : "The quick measure reads only the first \(ByteFormat.bytes(digestCap)) of the transcript.")
         }
-        notes.append("Token là ước lượng byte/4, không phải tokenizer của model.")
-        notes.append("Schema tool MCP không nằm trong prompt. Grok nạp chúng qua search_tool. Số MCP ở đây là đoạn mô tả server.")
+        notes.append("Tokens are a byte/4 estimate, not the model's tokenizer.")
+        notes.append("MCP tool schemas are not part of the prompt. Grok loads them through search_tool. The MCP figure here is the server description block.")
 
         let standing = compact([
             Slice(kind: .system, bytes: systemBytes > 0 ? systemBytes : (transcript[.system] ?? 0)),
@@ -311,7 +311,7 @@ private func noteSkillReads(_ skills: inout [SkillMeasure], arguments: String) {
             skills.append(SkillMeasure(
                 name: name,
                 catalogBytes: 0,
-                summary: "Đọc từ tool, không có trong catalog.",
+                summary: "Read from a tool, not in the catalog.",
                 path: path,
                 origin: "project",
                 diskBytes: SkillFiles.diskBytes(path),

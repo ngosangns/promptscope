@@ -65,7 +65,7 @@ NOTES_FILE="$(mktemp)"
 cat > "$NOTES_FILE" <<NOTES
 Promptscope ${TAG}
 
-CLI đo prompt của session Grok, Kiro, OMP, Pi, Devin và DSH trên máy này. Không gửi session đi đâu.
+CLI that measures the prompt of Grok, Kiro, OMP, Pi, Devin and DSH sessions on this machine. It never sends a session anywhere.
 
 ## CLI
 
@@ -79,7 +79,7 @@ chmod 755 ~/.local/share/promptscope/bin/promptscope-${VER} ~/.local/share/promp
 ln -sfn ../share/promptscope/bin/promptscope-${VER} ~/.local/bin/promptscope
 \`\`\`
 
-Sau lần cài đầu, \`promptscope update\` tải cả hai asset, kiểm digest GitHub, rồi đổi symlink. Bản đang chạy giữ inode cũ đến khi mở lại lệnh.
+After the first install, \`promptscope update\` downloads both assets, checks the GitHub digest, then swaps the symlink. A running copy keeps its old inode until the command is launched again.
 
 ## Asset
 

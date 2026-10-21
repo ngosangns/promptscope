@@ -189,7 +189,7 @@ public enum PromptText {
         if walk < text.endIndex { preamble += text[walk...] }
         if !preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             measures.insert(
-                SectionMeasure(name: "mở đầu", bytes: preamble.utf8.count, preview: PromptText.preview(preamble, limit: 160)),
+                SectionMeasure(name: "preamble", bytes: preamble.utf8.count, preview: PromptText.preview(preamble, limit: 160)),
                 at: 0
             )
         }
@@ -382,7 +382,7 @@ private func isSkillName<S: StringProtocol>(_ name: S) -> Bool {
 }
 
 func skillOrigin(_ path: String?) -> String {
-    guard let path else { return "không rõ" }
+    guard let path else { return "unknown" }
     if path.contains("/bundled/skills/") || path.contains("/.grok/bundled/") { return "bundled" }
     if path.contains("/.grok/skills/") || path.contains("/.kiro/skills/") || path.contains("/.agents/skills/")
         || path.contains("/.pi/agent/skills/") || path.contains("/.omp/agent/skills/")

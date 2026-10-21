@@ -1,28 +1,28 @@
-# Cách repo này được dựng
+# How this repo is built
 
-Promptscope đọc log local và đếm byte. Lõi là target Swift `PromptscopeKit`. CLI là `promptscope-cli` và nói chuyện với cùng lõi đó. Cửa sổ là `promptscope-gpui` trong repo anh em `ns-gpui`. Repo này không có UI.
+Promptscope reads local logs and counts bytes. The core is the Swift target `PromptscopeKit`. The CLI is `promptscope-cli` and talks to that same core. The window is `promptscope-gpui` in the sibling repo `ns-gpui`. This repo has no UI.
 
-## Chiều phụ thuộc
+## Dependency direction
 
 ```
-promptscope-cli     scan và report
+promptscope-cli     scan and report
    │
    ▼
-PromptscopeKit      parser từng agent, quét thư viện, đếm
+PromptscopeKit      per-agent parsers, library scan, counting
 ```
 
-`promptscope-cli` import `PromptscopeKit`. Kit không import SwiftUI và không import CLI. Parser không nằm trong CLI. Cửa sổ gọi CLI đã cài, không link Kit.
+`promptscope-cli` imports `PromptscopeKit`. The Kit imports neither SwiftUI nor the CLI. Parsers do not live in the CLI. The window calls the installed CLI and does not link the Kit.
 
-`promptscope update` không nằm trong Kit. CLI Swift tìm `promptscope-update-X.Y.Z` cạnh chính nó và exec binary Go đó. Binary Go tải asset `promptscope-vX.Y.Z-darwin-arm64` và `promptscope-update-vX.Y.Z-darwin-arm64`, kiểm digest GitHub, rồi đổi symlink `~/.local/bin/promptscope`.
+`promptscope update` is not in the Kit. The Swift CLI looks for `promptscope-update-X.Y.Z` next to itself and execs that Go binary. The Go binary downloads the assets `promptscope-vX.Y.Z-darwin-arm64` and `promptscope-update-vX.Y.Z-darwin-arm64`, checks the GitHub digest, then swaps the `~/.local/bin/promptscope` symlink.
 
-Mỗi file `*Analyzer.swift` là một định dạng log riêng, cùng một kết quả (`Report`). Thêm một agent là thêm một analyzer và một case trong CLI.
+Each `*Analyzer.swift` file handles one log format and produces the same result (`Report`). Adding an agent means adding an analyzer and a case in the CLI.
 
-## Phạm vi
+## Scope
 
-Trong phạm vi: đo prompt đứng và transcript của Grok, Kiro IDE, Kiro CLI, OMP, Pi, Devin, DSH trên máy này. Không gửi session đi đâu.
+In scope: measuring the standing prompt and transcript of Grok, Kiro IDE, Kiro CLI, OMP, Pi, Devin and DSH on this machine. Never sending a session anywhere.
 
-Ngoài phạm vi: UI trong repo này, command palette, extension host, daemon, collaboration, tokenizer của nhà cung cấp (số `~` là `byte / 4`), và một bản parser thứ hai trong CLI.
+Out of scope: UI in this repo, a command palette, an extension host, a daemon, collaboration, provider tokenizers (the `~` figure is `byte / 4`), and a second parser inside the CLI.
 
 ## GitHub
 
-`ci.yml` chạy `swift test` trên macOS. `release.yml` đóng gói CLI khi có tag `v*`.
+`ci.yml` runs `swift test` on macOS. `release.yml` packages the CLI on a `v*` tag.

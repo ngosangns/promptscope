@@ -36,7 +36,7 @@ public enum LibraryScanner {
         if FileManager.default.fileExists(atPath: grokHome.appendingPathComponent("sessions").path) {
             sessions.append(contentsOf: scanGrok(grokHome.appendingPathComponent("sessions")))
         } else {
-            notes.append("Không thấy \(grokHome.path)/sessions.")
+            notes.append("Not found: \(grokHome.path)/sessions.")
         }
         let kiroSessions = kiroHome.appendingPathComponent("sessions")
         if FileManager.default.fileExists(atPath: kiroSessions.path) {
@@ -44,25 +44,25 @@ public enum LibraryScanner {
             sessions.append(contentsOf: kiro.sessions)
             skipped = kiro.skipped
         } else {
-            notes.append("Không thấy \(kiroHome.path)/sessions.")
+            notes.append("Not found: \(kiroHome.path)/sessions.")
         }
         let ompSessions = ompHome.appendingPathComponent("agent/sessions")
         if FileManager.default.fileExists(atPath: ompSessions.path) {
             sessions.append(contentsOf: scanPiFamily(ompSessions, source: .omp))
         } else {
-            notes.append("Không thấy \(ompSessions.path).")
+            notes.append("Not found: \(ompSessions.path).")
         }
         let piSessions = piHome.appendingPathComponent("agent/sessions")
         if FileManager.default.fileExists(atPath: piSessions.path) {
             sessions.append(contentsOf: scanPiFamily(piSessions, source: .pi))
         } else {
-            notes.append("Không thấy \(piSessions.path).")
+            notes.append("Not found: \(piSessions.path).")
         }
         let devinTranscripts = devinHome.appendingPathComponent("cli/transcripts")
         if FileManager.default.fileExists(atPath: devinTranscripts.path) {
             sessions.append(contentsOf: scanDevin(devinTranscripts))
         } else {
-            notes.append("Không thấy \(devinTranscripts.path).")
+            notes.append("Not found: \(devinTranscripts.path).")
         }
         let dshSessions = dshHome.appendingPathComponent("sessions")
         if FileManager.default.fileExists(atPath: dshSessions.path) {
@@ -70,7 +70,7 @@ public enum LibraryScanner {
             sessions.append(contentsOf: dsh.sessions)
             skipped += dsh.skipped
         } else {
-            notes.append("Không thấy \(dshSessions.path).")
+            notes.append("Not found: \(dshSessions.path).")
         }
         return LibraryScan(sessions: sessions, skippedEmptyCLI: skipped, notes: notes)
     }
@@ -121,7 +121,7 @@ private func scanGrok(_ root: URL) -> [SessionRef] {
             let info = summary["info"] as? [String: Any]
             let sessionID = (info?["id"] as? String) ?? child.lastPathComponent
             let cwd = info?["cwd"] as? String ?? ""
-            let title = nonEmpty(summary["generated_title"]) ?? nonEmpty(summary["session_summary"]) ?? "Không tiêu đề"
+            let title = nonEmpty(summary["generated_title"]) ?? nonEmpty(summary["session_summary"]) ?? "Untitled"
             let updated = Dates.parse(summary["updated_at"] as? String) ?? Dates.parse(summary["last_active_at"] as? String)
             let created = Dates.parse(summary["created_at"] as? String)
             let chatBytes = Files.size(child.appendingPathComponent("chat_history.jsonl"))
@@ -184,7 +184,7 @@ private func scanKiro(_ root: URL) -> (sessions: [SessionRef], skipped: Int) {
                 id: "kiro-ide:\(sessionID)",
                 source: .kiroIDE,
                 sessionID: sessionID,
-                title: nonEmpty(object["title"]) ?? "Không tiêu đề",
+                title: nonEmpty(object["title"]) ?? "Untitled",
                 cwd: cwd,
                 model: nonEmpty(object["modelId"]),
                 agent: nonEmpty(object["agentMode"]),
@@ -228,7 +228,7 @@ private func scanKiroCLI(_ root: URL) -> (sessions: [SessionRef], skipped: Int) 
         let created = Dates.parse(object["created_at"] as? String)
         let reason = object["session_created_reason"] as? String
         var title = nonEmpty(object["title"]) ?? ""
-        if title.isEmpty { title = cliPromptTitle(file.deletingPathExtension().appendingPathExtension("jsonl")) ?? "Không tiêu đề" }
+        if title.isEmpty { title = cliPromptTitle(file.deletingPathExtension().appendingPathExtension("jsonl")) ?? "Untitled" }
         sessions.append(SessionRef(
             id: "kiro-cli:\(id)",
             source: .kiroCLI,

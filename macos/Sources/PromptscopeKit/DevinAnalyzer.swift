@@ -6,7 +6,7 @@ enum DevinAnalyzer {
     static func report(_ ref: SessionRef) -> SessionReport {
         let url = URL(fileURLWithPath: ref.locator)
         guard let object = JSONFile.object(url: url, maxBytes: 12 * 1024 * 1024) else {
-            return empty(ref, note: "Không đọc được transcript Devin, hoặc file lớn hơn 12 MB.")
+            return empty(ref, note: "Could not read the Devin transcript, or the file is larger than 12 MB.")
         }
         return analyze(ref, object: object, truncated: Files.size(url) > 12 * 1024 * 1024)
     }
@@ -135,10 +135,10 @@ enum DevinAnalyzer {
         if summaryBytes > 0 { standing[.other, default: 0] += summaryBytes }
 
         var notes = [
-            "Prompt đứng là các system step (identity, skill, MCP, luật) cộng schema tool. Tóm tắt phiên trước nằm ở mục Khác.",
-            "Token đầu vào là prompt_tokens của lượt agent cuối, không phải byte/4.",
+            "The standing prompt is the system steps (identity, skills, MCP, rules) plus the tool schema. The summary of the previous session is under Other.",
+            "Input tokens are prompt_tokens of the last agent turn, not byte/4.",
         ]
-        if truncated { notes.append("File lớn hơn 12 MB, chưa đọc hết.") }
+        if truncated { notes.append("The file is larger than 12 MB and was not read in full.") }
         let ranked = heavy.sorted { $0.1 > $1.1 }.prefix(8).enumerated().map { index, item in
             HeavyResult(rank: index + 1, tool: item.0, bytes: item.1)
         }
@@ -188,7 +188,7 @@ private func sectionName(_ message: String, _ kind: DevinKind) -> String {
     case .skills: return "available_skills"
     case .mcp: return "mcp"
     case .rules: return "rules"
-    case .summary: return "tóm tắt phiên trước"
+    case .summary: return "previous session summary"
     case .system:
         let line = message.split(whereSeparator: \.isNewline).first.map(String.init) ?? "system"
         return PromptText.preview(line, limit: 48)
@@ -213,7 +213,7 @@ private func parseSkills(_ text: String) -> [SkillMeasure] {
             catalogBytes: block.utf8.count,
             summary: PromptText.preview(block, limit: 180),
             path: nil,
-            origin: "không rõ"
+            origin: "unknown"
         )
         if var existing = byName[name] {
             if measure.catalogBytes > existing.catalogBytes {

@@ -14,7 +14,7 @@ func fail(_ message: String) -> Never {
 let releaseVersion = "0.0.0-dev"
 
 guard let command = arguments.first else {
-    fail("dùng: promptscope scan | report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <đường dẫn> | update")
+    fail("usage: promptscope scan | report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path> | update")
 }
 
 switch command {
@@ -23,10 +23,10 @@ case "--version", "-V", "version":
     exit(0)
 case "--help", "-h", "help":
     print("""
-    promptscope — đo prompt của session trên máy này
+    promptscope — measures the prompt of sessions on this machine
 
-    dùng: promptscope scan
-          promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <đường dẫn>
+    usage: promptscope scan
+          promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path>
           promptscope update [--check] [--json] [--force]
     """)
     exit(0)
@@ -51,11 +51,11 @@ case "scan":
     for source in AgentSource.allCases {
         print("  \(source.label) \(counts[source] ?? 0)")
     }
-    print("cli rỗng đã bỏ \(scan.skippedEmptyCLI)")
+    print("empty cli skipped \(scan.skippedEmptyCLI)")
     for note in scan.notes { print(note) }
 case "report":
     guard arguments.count >= 3 else {
-        fail("dùng: promptscope-cli report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <đường dẫn>")
+        fail("usage: promptscope-cli report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path>")
     }
     // The window passes the library id (`dsh:<session>`) as the source argument.
     let sourceName = arguments[1].split(separator: ":", maxSplits: 1).first.map(String.init) ?? arguments[1]
@@ -68,7 +68,7 @@ case "report":
     case "pi": source = .pi
     case "devin": source = .devin
     case "dsh": source = .dsh
-    default: fail("nguồn phải là grok, kiro-ide, kiro-cli, omp, pi, devin, hoặc dsh")
+    default: fail("source must be grok, kiro-ide, kiro-cli, omp, pi, devin, or dsh")
     }
     let path = URL(fileURLWithPath: arguments[2]).standardizedFileURL.path
     let ref = SessionRef(
@@ -104,14 +104,14 @@ case "report":
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8) else {
-            fail("không ghi được trajectory")
+            fail("could not write trajectory")
         }
         print(text)
     } else {
         print(ReportText.plain(report))
     }
 default:
-    fail("lệnh không rõ: \(command)")
+    fail("unknown command: \(command)")
 }
 
 /// `promptscope update` is the Go updater installed beside this binary. It
@@ -119,7 +119,7 @@ default:
 /// to itself. A `swift run` build has no sibling and says so.
 func runUpdate(_ args: [String]) -> Never {
     guard let updater = installedUpdater() else {
-        fail("promptscope update: không thấy promptscope-update cạnh binary này. Cài bằng task cli:install hoặc bản release.")
+        fail("promptscope update: promptscope-update not found next to this binary. Install with task cli:install or a release build.")
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: updater)
@@ -129,7 +129,7 @@ func runUpdate(_ args: [String]) -> Never {
     do {
         try process.run()
     } catch {
-        fail("promptscope update: không chạy được \(updater): \(error)")
+        fail("promptscope update: could not run \(updater): \(error)")
     }
     process.waitUntilExit()
     exit(process.terminationStatus)

@@ -6,7 +6,7 @@ Promptscope measures how Grok, Kiro, OMP, Pi, Devin, and DSH sessions spend thei
 The analyzer is in-process Swift. `go/` is only the self-updater. There is no daemon.
 The window is `promptscope-gpui` in the sibling repo `ns-gpui`. This repo has no UI.
 
-Cách ghép Kit và CLI nằm trong `ARCHITECTURE.md`.
+How the Kit and the CLI fit together is described in `ARCHITECTURE.md`.
 
 - `macos/Sources/PromptscopeKit` — models, parsers, library scan. No UI imports. Unit-tested.
 - `macos/Sources/promptscope-cli` — `report`, `scan`, and `update` (execs the Go updater).

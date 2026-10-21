@@ -16,7 +16,7 @@ final class AnalyzerTests: XCTestCase {
         """
         let sections = PromptText.sections(in: text)
         let names = sections.map(\.name)
-        XCTAssertEqual(names, ["mở đầu", "dangerous_actions", "work_policy"])
+        XCTAssertEqual(names, ["preamble", "dangerous_actions", "work_policy"])
         let danger = sections.first { $0.name == "dangerous_actions" }!
         XCTAssertTrue(danger.preview.contains("Do not delete"))
         XCTAssertGreaterThan(danger.bytes, "Do not delete.".utf8.count)
@@ -109,15 +109,15 @@ final class AnalyzerTests: XCTestCase {
             ["type": "user", "content": rules],
             ["type": "user", "content": skillReminder, "synthetic_reason": "system_reminder"],
             ["type": "user", "content": mcpReminder, "synthetic_reason": "system_reminder"],
-            ["type": "user", "content": "<user_query>phân tích session</user_query>"],
-            ["type": "assistant", "content": "đang đọc", "tool_calls": [[
+            ["type": "user", "content": "<user_query>analyze session</user_query>"],
+            ["type": "assistant", "content": "reading", "tool_calls": [[
                 "id": "c1", "name": "read_file", "arguments": argumentText,
             ]]],
             ["type": "tool_result", "tool_call_id": "c1", "content": "full skill body"],
         ], session.appendingPathComponent("chat_history.jsonl"))
         try writeJSON([
             "info": ["id": "sess", "cwd": "/Users/me/app"],
-            "generated_title": "Phân tích",
+            "generated_title": "Analysis",
             "current_model_id": "grok-4.7",
             "created_at": "2026-10-17T10:00:00Z",
             "updated_at": "2026-10-17T10:05:00Z",
@@ -137,7 +137,7 @@ final class AnalyzerTests: XCTestCase {
             id: "grok:sess",
             source: .grok,
             sessionID: "sess",
-            title: "Phân tích",
+            title: "Analysis",
             cwd: "/Users/me/app",
             model: "grok-4.7",
             agent: nil,
@@ -151,14 +151,14 @@ final class AnalyzerTests: XCTestCase {
             fingerprint: "x"
         )
         let report = SessionAnalyzer.report(for: ref)
-        XCTAssertEqual(report.sections.map(\.name), ["mở đầu", "dangerous_actions"])
+        XCTAssertEqual(report.sections.map(\.name), ["preamble", "dangerous_actions"])
         XCTAssertEqual(report.skills.map(\.name), ["alpha-skill"])
         XCTAssertEqual(report.skills[0].readCount, 1)
         XCTAssertEqual(report.skills[0].diskBytes, "full skill body".utf8.count)
         XCTAssertEqual(report.mcp.first { $0.name == "context7" }?.status, "connected")
         XCTAssertEqual(report.mcp.first { $0.name == "context7" }?.tools, ["resolve-library-id", "query-docs"])
         XCTAssertEqual(report.mcp.first { $0.name == "cloudflare-api" }?.status, "auth")
-        XCTAssertEqual(report.turns.map(\.preview), ["phân tích session"])
+        XCTAssertEqual(report.turns.map(\.preview), ["analyze session"])
         XCTAssertEqual(report.tools.first { $0.name == "read_file" }?.calls, 1)
         XCTAssertGreaterThan(report.tools.first { $0.name == "read_file" }?.resultBytes ?? 0, 0)
         let kinds = Set(report.standing.map(\.kind))
@@ -212,7 +212,7 @@ final class AnalyzerTests: XCTestCase {
         let agentURL = "file://\(agents.path)"
         try writeJSONLines([
             ["id": "s", "payload": ["type": "steering_inclusion", "documents": [agentURL]]],
-            ["id": "u", "payload": ["type": "user", "content": "có skill daily report không?"]],
+            ["id": "u", "payload": ["type": "user", "content": "is there a daily report skill?"]],
             ["id": "c", "payload": [
                 "type": "tool_call",
                 "toolCallId": "c1",
@@ -285,7 +285,7 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertEqual(ideReport.skills.first?.name, "daily-report")
         XCTAssertEqual(ideReport.skills.first?.readCount, 1)
         XCTAssertEqual(ideReport.contextPercent ?? 0, 12.5, accuracy: 0.01)
-        XCTAssertEqual(ideReport.turns.first?.preview, "có skill daily report không?")
+        XCTAssertEqual(ideReport.turns.first?.preview, "is there a daily report skill?")
         XCTAssertEqual(ideReport.tools.first { $0.name == "read_file" }?.resultBytes, "daily".utf8.count)
 
         let cliReport = SessionAnalyzer.report(for: byID["cli-1"]!)
@@ -330,7 +330,7 @@ final class AnalyzerTests: XCTestCase {
                 ],
                 "toolsAdded": [["name": "read", "description": "Read a file"]],
             ]],
-            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "đọc skill"]]]],
+            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "read skill"]]]],
             ["type": "message", "message": [
                 "role": "assistant",
                 "content": [[
@@ -345,10 +345,10 @@ final class AnalyzerTests: XCTestCase {
         let ompDir = root.appendingPathComponent("omp/agent/sessions/-proj", isDirectory: true)
         try FileManager.default.createDirectory(at: ompDir, withIntermediateDirectories: true)
         try writeJSONLines([
-            ["type": "title", "title": "Sửa daemon", "updatedAt": "2026-10-08T08:40:00Z"],
+            ["type": "title", "title": "Fix daemon", "updatedAt": "2026-10-08T08:40:00Z"],
             ["type": "session", "id": "omp-1", "timestamp": "2026-10-08T08:36:39Z", "cwd": "/Users/me/app"],
             ["type": "model_change", "model": "kiro/claude"],
-            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "sửa daemon"]]]],
+            ["type": "message", "message": ["role": "user", "content": [["type": "text", "text": "fix daemon"]]]],
             ["type": "message", "message": [
                 "role": "assistant",
                 "content": [["type": "toolCall", "name": "read", "arguments": ["path": skill.path]]],
@@ -403,11 +403,11 @@ final class AnalyzerTests: XCTestCase {
                 ],
                 [
                     "step_id": 4, "source": "user", "timestamp": "2026-10-15T16:25:00Z",
-                    "message": "dùng skill alpha",
+                    "message": "use skill alpha",
                 ],
                 [
                     "step_id": 5, "source": "agent", "timestamp": "2026-10-15T16:25:10Z",
-                    "message": "Đang mở skill.",
+                    "message": "Opening skill.",
                     "metrics": ["prompt_tokens": 4321, "completion_tokens": 20],
                     "tool_calls": [[
                         "tool_call_id": "c1",
@@ -434,7 +434,7 @@ final class AnalyzerTests: XCTestCase {
                 "role": "system", "content": [["type": "text", "text": "You are an AI agent powered by DeepSeek Harness."]],
             ]]],
             ["type": "user/message", "time": 1_792_477_539_468.0, "data": [
-                "content": [["type": "text", "text": "đo session này"]],
+                "content": [["type": "text", "text": "measure this session"]],
                 "source": ["kind": "user"], "role": "user",
             ]],
             ["type": "user/message", "data": [
@@ -473,7 +473,7 @@ final class AnalyzerTests: XCTestCase {
             ]]],
             ["type": "assistant/message", "time": 1_792_477_542_037.0, "data": [
                 "message": ["content": [
-                    ["type": "reasoning", "text": "đang đo"],
+                    ["type": "reasoning", "text": "measuring"],
                     ["type": "text", "text": "xong"],
                 ]],
                 "usage": ["inputTokens": 21_206, "outputTokens": 68],
@@ -493,7 +493,7 @@ final class AnalyzerTests: XCTestCase {
             ],
             ["type": "turn/start", "data": ["turn": 1]],
             ["type": "user/message", "data": [
-                "content": [["type": "text", "text": "việc con"]],
+                "content": [["type": "text", "text": "child task"]],
                 "source": ["kind": "user"], "role": "user",
             ]],
         ], dshChild.appendingPathComponent("session.v4.jsonl"))
@@ -517,13 +517,13 @@ final class AnalyzerTests: XCTestCase {
         let byID = Dictionary(uniqueKeysWithValues: scan.sessions.map { ($0.sessionID, $0) })
         XCTAssertEqual(byID["pi-1"]?.source, .pi)
         XCTAssertEqual(byID["pi-1"]?.cwd, "/Users/me/app")
-        XCTAssertEqual(byID["pi-1"]?.title, "đọc skill")
-        XCTAssertEqual(byID["omp-1"]?.title, "Sửa daemon")
+        XCTAssertEqual(byID["pi-1"]?.title, "read skill")
+        XCTAssertEqual(byID["omp-1"]?.title, "Fix daemon")
         XCTAssertEqual(byID["omp-1"]?.model, "kiro/claude")
         XCTAssertEqual(byID["omp-child"]?.isSubagent, true)
         XCTAssertEqual(byID["calm-session"]?.source, .devin)
         XCTAssertEqual(byID["calm-session"]?.model, "SWE-2 High")
-        XCTAssertEqual(byID["calm-session"]?.title, "dùng skill alpha")
+        XCTAssertEqual(byID["calm-session"]?.title, "use skill alpha")
 
         let piReport = SessionAnalyzer.report(for: byID["pi-1"]!)
         XCTAssertEqual(piReport.skills.first?.name, "alpha-skill")
@@ -536,7 +536,7 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(piReport.standing.first { $0.kind == .skills }?.bytes ?? 0, 0)
         XCTAssertEqual(piReport.promptTokens, 150)
         XCTAssertEqual(piReport.tools.first { $0.name == "read" }?.calls, 1)
-        XCTAssertEqual(piReport.turns.first?.preview, "đọc skill")
+        XCTAssertEqual(piReport.turns.first?.preview, "read skill")
         let piDigest = SessionAnalyzer.digest(for: byID["pi-1"]!)
         XCTAssertEqual(piDigest.promptTokens, 150)
         XCTAssertGreaterThan(piDigest.standingBytes, 0)
@@ -549,7 +549,7 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertEqual(ompReport.contextPercent ?? 0, 10, accuracy: 0.01)
         XCTAssertEqual(ompReport.contextWindow, 200000)
         XCTAssertEqual(ompReport.sections.isEmpty, true)
-        XCTAssertTrue(ompReport.notes.contains { $0.contains("không lưu") })
+        XCTAssertTrue(ompReport.notes.contains { $0.contains("does not store") })
 
         let devinReport = SessionAnalyzer.report(for: byID["calm-session"]!)
         XCTAssertEqual(devinReport.skills.map(\.name), ["alpha-skill", "daily-report"])
@@ -561,12 +561,12 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(devinReport.standing.first { $0.kind == .toolDefs }?.bytes ?? 0, 0)
         XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.calls, 1)
         XCTAssertEqual(devinReport.tools.first { $0.name == "skill" }?.resultBytes, "skill body".utf8.count)
-        XCTAssertEqual(devinReport.turns.first?.preview, "dùng skill alpha")
+        XCTAssertEqual(devinReport.turns.first?.preview, "use skill alpha")
 
         XCTAssertEqual(byID["session-dsh-1"]?.source, .dsh)
         XCTAssertEqual(byID["session-dsh-1"]?.cwd, "/Users/me/app")
         XCTAssertEqual(byID["session-dsh-1"]?.model, "grok-4.7")
-        XCTAssertEqual(byID["session-dsh-1"]?.title, "đo session này")
+        XCTAssertEqual(byID["session-dsh-1"]?.title, "measure this session")
         XCTAssertEqual(byID["session-dsh-1"]?.isSubagent, false)
         XCTAssertEqual(byID["session-dsh-child"]?.isSubagent, true)
         XCTAssertEqual(byID["session-dsh-child"]?.isTemporary, true)
@@ -586,12 +586,12 @@ final class AnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(dshReport.standing.first { $0.kind == .toolDefs }?.bytes ?? 0, 0)
         XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.calls, 1)
         XCTAssertEqual(dshReport.tools.first { $0.name == "bash" }?.resultBytes, "Cargo.toml".utf8.count)
-        XCTAssertEqual(dshReport.turns.first?.preview, "đo session này")
+        XCTAssertEqual(dshReport.turns.first?.preview, "measure this session")
         XCTAssertEqual(dshReport.trajectory.map(\.kind), ["user", "tool", "assistant"])
         XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.label, "bash")
         XCTAssertNotNil(dshReport.trajectory.first?.at)
         XCTAssertEqual(dshReport.trajectory.first { $0.kind == "tool" }?.durationMs, 1000)
-        XCTAssertEqual(dshReport.transcript.first { $0.kind == .reasoning }?.bytes, "đang đo".utf8.count)
+        XCTAssertEqual(dshReport.transcript.first { $0.kind == .reasoning }?.bytes, "measuring".utf8.count)
         XCTAssertTrue(dshReport.notes.contains { $0.contains("120") })
         let dshDigest = SessionAnalyzer.digest(for: byID["session-dsh-1"]!)
         XCTAssertEqual(dshDigest.promptTokens, 21_206)

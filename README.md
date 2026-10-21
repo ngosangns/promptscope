@@ -2,69 +2,69 @@
 
 # Promptscope
 
-Đo phần nào đang chiếm context của session **Grok**, **Kiro**, **OMP**, **Pi**, **Devin** và **DSH** trên máy này.
+Measures what takes up the context of your **Grok**, **Kiro**, **OMP**, **Pi**, **Devin** and **DSH** sessions on this machine.
 
-Nó đọc log local. Không gửi session đi đâu.
+It reads local logs. It never sends a session anywhere.
 
-Phần đo nằm trong `macos/Sources/PromptscopeKit`. CLI là `macos/Sources/promptscope-cli`. Cửa sổ là `promptscope-gpui` trong repo anh em `ns-gpui`. Cách các lớp phụ thuộc nhau nằm trong [ARCHITECTURE.md](ARCHITECTURE.md).
+The measuring code lives in `macos/Sources/PromptscopeKit`. The CLI is `macos/Sources/promptscope-cli`. The window is `promptscope-gpui` in the sibling repo `ns-gpui`. How the layers depend on each other is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Promptscope đo gì
+## What Promptscope measures
 
-**Prompt đứng** là phần model phải mang trước nội dung hội thoại:
+The **standing prompt** is what the model must carry before any conversation content:
 
-| Thành phần | Grok lấy từ |
+| Component | Where Grok gets it |
 | --- | --- |
-| System prompt | `system_prompt.txt`, tách theo thẻ chiếm trọn một dòng |
-| Skill | đoạn catalog trong `chat_history.jsonl` (`skills are available`), cộng kích thước `SKILL.md` trên đĩa và số lần tool đọc file đó |
-| MCP | đoạn mô tả server trong system reminder, trạng thái từ `events.jsonl` |
-| Luật và user info | message `<user_rules>` / `<user_info>` |
-| Định nghĩa tool | `tool_definitions.json` |
+| System prompt | `system_prompt.txt`, split on tags that take a whole line |
+| Skills | the catalog block in `chat_history.jsonl` (`skills are available`), plus the size of `SKILL.md` on disk and how many times a tool read that file |
+| MCP | the server description block in the system reminder, status from `events.jsonl` |
+| Rules and user info | the `<user_rules>` / `<user_info>` messages |
+| Tool definitions | `tool_definitions.json` |
 
-Schema từng tool MCP **không** nằm trong prompt. Grok nạp chúng qua `search_tool`. Số MCP ở đây là đoạn mô tả server.
+Individual MCP tool schemas are **not** part of the prompt. Grok loads them through `search_tool`. The MCP figure here is the server description block.
 
-**Transcript** là tổng chữ trong log (user, assistant, kết quả tool, reasoning đã lưu). Compaction có thể làm context thực tế nhỏ hơn file.
+The **transcript** is the total text in the log (user, assistant, tool results, saved reasoning). Compaction can make the real context smaller than the file.
 
-**Kiro IDE** không ghi system prompt đầy đủ. App đo file steering, các `SKILL.md` agent đã đọc, kết quả tool, và `contextUsage`.
+**Kiro IDE** does not record the full system prompt. The app measures steering files, the `SKILL.md` files the agent read, tool results, and `contextUsage`.
 
-**Kiro CLI** không lưu system prompt. App đọc `context %` và cửa sổ token trong sidecar JSON, rồi tách prompt / assistant / tool trong `.jsonl`. Session CLI có transcript rỗng bị bỏ qua.
+**Kiro CLI** does not store the system prompt. The app reads `context %` and the token window from the sidecar JSON, then splits prompt / assistant / tool in the `.jsonl`. CLI sessions with an empty transcript are skipped.
 
-**Pi** (`~/.pi/agent/sessions`) ghi prompt đứng trong message `system.sections`: preamble, rules, project context, catalog skill, MCP, và schema `toolsAdded`.
+**Pi** (`~/.pi/agent/sessions`) records the standing prompt in the `system.sections` message: preamble, rules, project context, skill catalog, MCP, and the `toolsAdded` schema.
 
-**OMP** (`~/.omp/agent/sessions`) dùng cùng định dạng JSONL nhưng không lưu nội dung system prompt, chỉ một `system-prompt-digest`. App lấy token đầu vào và `context %` từ usage của lượt assistant cuối, rồi đếm `SKILL.md` đã đọc. File jsonl nằm trong thư mục kèm theo là subagent.
+**OMP** (`~/.omp/agent/sessions`) uses the same JSONL format but does not store the system prompt text, only a `system-prompt-digest`. The app takes input tokens and `context %` from the usage of the last assistant turn, then counts the `SKILL.md` files that were read. A jsonl file inside the accompanying directory is a subagent.
 
-**Devin CLI** (`~/.local/share/devin/cli/transcripts`) ghi system step: identity, catalog MCP, `<available_skills>`, luật, và `tool_definitions`. `prompt_tokens` của lượt agent cuối là token đầu vào.
+**Devin CLI** (`~/.local/share/devin/cli/transcripts`) records system steps: identity, MCP catalog, `<available_skills>`, rules, and `tool_definitions`. `prompt_tokens` of the last agent turn is the input token count.
 
-**DSH** (`~/.dsh/sessions`) ghi một log append-only `session.v4.jsonl`, thường nén `.zstd`. Prompt đứng là `system/message` đã render, cộng các `user/message` phân vai: luật, catalog skill, snapshot runtime. Schema tool nằm trong `request/header` mới nhất. `inputTokens` của lượt assistant cuối là token đầu vào. Chỉ đọc v4. Session không có turn, và session có `delegationDepth` lớn hơn 0, bị bỏ qua hoặc đánh dấu subagent.
+**DSH** (`~/.dsh/sessions`) writes one append-only log, `session.v4.jsonl`, usually compressed as `.zstd`. The standing prompt is the rendered `system/message` plus the role-tagged `user/message` rows: rules, skill catalog, runtime snapshot. The tool schema is in the latest `request/header`. `inputTokens` of the last assistant turn is the input token count. Only v4 is read. Sessions with no turns are skipped, and sessions with `delegationDepth` greater than 0 are skipped or marked as subagents.
 
-Token ghi `~` là `byte / 4`. Đó không phải tokenizer của model. Với Kiro CLI, nếu sidecar có cửa sổ token thì số đó được ghi riêng.
+Tokens marked `~` are `byte / 4`. That is not the model's tokenizer. For Kiro CLI, if the sidecar has a token window, that number is reported separately.
 
-## Tải
+## Download
 
-Bản darwin-arm64: <https://github.com/ngosangns/promptscope/releases/latest>
+darwin-arm64 build: <https://github.com/ngosangns/promptscope/releases/latest>
 
-`task release:build` chạy test và ghi CLI vào `dist/`. `task release:publish` đăng release đó. Đẩy tag `v*` thì GitHub Actions đóng gói cùng asset.
+`task release:build` runs the tests and writes the CLI to `dist/`. `task release:publish` publishes that release. Pushing a `v*` tag makes GitHub Actions package the same assets.
 
-Lần cài đầu đặt binary vào `~/.local/share/promptscope/bin/promptscope-X.Y.Z` và trỏ `~/.local/bin/promptscope` tới đó. Cạnh nó là `promptscope-update-X.Y.Z`. Sau đó:
+The first install puts the binary at `~/.local/share/promptscope/bin/promptscope-X.Y.Z` and points `~/.local/bin/promptscope` at it. Next to it sits `promptscope-update-X.Y.Z`. After that:
 
 ```bash
 promptscope update --check
 promptscope update
 ```
 
-`promptscope update` chỉ thay symlink do lần cài đó tạo. Nó kiểm digest `sha256` GitHub của cả CLI và updater, chạy `--version` trên bản mới, rồi đổi tên file vào chỗ. Không ghi đè inode đang chạy. Không hạ version, trừ `--force` khi bằng version hiện tại.
+`promptscope update` only replaces a symlink created by that install. It checks the GitHub `sha256` digest of both the CLI and the updater, runs `--version` on the new build, then renames the file into place. It never overwrites a running inode. It never downgrades, except `--force` when the version is equal to the current one.
 
-## Chạy
+## Run
 
-Từ thư mục repo:
+From the repo directory:
 
 ```bash
 task test
 task cli:install
 ```
 
-`task --list` liệt kê mọi lệnh.
+`task --list` lists every command.
 
-In một session ra terminal, từ `macos/`:
+To print one session to the terminal, from `macos/`:
 
 ```bash
 swift run promptscope-cli report grok ~/.grok/sessions/<cwd>/<id>
@@ -77,8 +77,8 @@ swift run promptscope-cli report dsh ~/.dsh/sessions/<cwd>/<id>/session.v4.jsonl
 swift run promptscope-cli scan
 ```
 
-`task cli:install` đặt CLI release vào `~/.local/share/promptscope/bin/` và trỏ `~/.local/bin/promptscope` tới đó.
+`task cli:install` puts the release CLI in `~/.local/share/promptscope/bin/` and points `~/.local/bin/promptscope` at it.
 
-Lần quét đầu đọc prefix của từng session Grok (system prompt, catalog skill, MCP) và cache vào `~/Library/Application Support/Promptscope/digests.json`. Mở một phiên thì đọc full transcript của phiên đó.
+The first scan reads the prefix of every Grok session (system prompt, skill catalog, MCP) and caches it in `~/Library/Application Support/Promptscope/digests.json`. Opening a session reads its full transcript.
 
-Mặc định ẩn session trong `/tmp` và subagent.
+Sessions under `/tmp` and subagents are hidden by default.
