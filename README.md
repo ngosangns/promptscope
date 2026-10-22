@@ -6,7 +6,7 @@ Measures what takes up the context of your **Grok**, **Kiro**, **OMP**, **Pi**, 
 
 It reads local logs. It never sends a session anywhere.
 
-The measuring code lives in `macos/Sources/PromptscopeKit`. The CLI is `macos/Sources/promptscope-cli`. The window is `promptscope-gpui` in the sibling repo `ns-gpui`. How the layers depend on each other is described in [ARCHITECTURE.md](ARCHITECTURE.md).
+The measuring code lives in `macos/Sources/PromptscopeKit`. The CLI is `macos/Sources/promptscope-cli` (`scan`, `report`, `update`). The window is `promptscope-gpui` in the sibling repo `ns-gpui`; this repo has no UI. How the layers depend on each other is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What Promptscope measures
 
@@ -38,11 +38,35 @@ The **transcript** is the total text in the log (user, assistant, tool results, 
 
 Tokens marked `~` are `byte / 4`. That is not the model's tokenizer. For Kiro CLI, if the sidecar has a token window, that number is reported separately.
 
+## Screenshots
+
+The window is `promptscope-gpui` (dark theme, 1440×900). The left sidebar is cropped out of the desktop shots. They show sessions of open-source dev work on this repo, `ns-gpui` and `synca`.
+
+![Workspace page: prompt components, skills and MCP servers, session list](docs/screenshots/workspace.png)
+
+Workspace page (`synca`). Left: sessions and transcript size for the current filters, then what every request carries before the conversation starts (prompt components, skills, MCP servers), summed over the sessions in view. Right: search, source chips and the sessions of that workspace.
+
+![Session page, Conversation tab](docs/screenshots/conversation.png)
+
+Session page, Conversation tab: a turn with its prompt, then reasoning, assistant text and tool calls in order, each with its offset, duration and token count.
+
+![Session page, Timeline tab](docs/screenshots/timeline.png)
+
+Timeline tab: model, tool and background spans on one time axis, with the prompt breakdown (Standing, Skills, MCP, Tool cost, Notes) below.
+
+![Session page, Tool time tab](docs/screenshots/tool-time.png)
+
+Tool time tab: one row per tool with calls, total time and slowest call in ms, sorted by total time. Tools with failed calls show "· N failed".
+
+![Session page in a 390 pt wide window](docs/screenshots/mobile-session.png)
+
+The same session page in a narrow window: one pane at a time, with a back arrow to the session list.
+
 ## Download
 
 darwin-arm64 build: <https://github.com/ngosangns/promptscope/releases/latest>
 
-`task release:build` runs the tests and writes the CLI to `dist/`. `task release:publish` publishes that release. Pushing a `v*` tag makes GitHub Actions package the same assets.
+A release has three assets: `promptscope-vX.Y.Z-darwin-arm64` (the CLI), `promptscope-update-vX.Y.Z-darwin-arm64` (the updater) and `SHA256SUMS`. `task release:build` runs the tests and writes them to `dist/`. `task release:publish` publishes that release. Pushing a `v*` tag makes GitHub Actions run the same script.
 
 The first install puts the binary at `~/.local/share/promptscope/bin/promptscope-X.Y.Z` and points `~/.local/bin/promptscope` at it. Next to it sits `promptscope-update-X.Y.Z`. After that:
 
@@ -51,34 +75,76 @@ promptscope update --check
 promptscope update
 ```
 
-`promptscope update` only replaces a symlink created by that install. It checks the GitHub `sha256` digest of both the CLI and the updater, runs `--version` on the new build, then renames the file into place. It never overwrites a running inode. It never downgrades, except `--force` when the version is equal to the current one.
+`promptscope update` only replaces a symlink created by that install. It checks the GitHub `sha256` digest of both the CLI and the updater, runs `--version` on the new build, then renames the file into place. It never overwrites a running inode. It never downgrades, except `--force` when the version is equal to the current one. `--json` prints the result as JSON. The updater only supports darwin-arm64. A `swift run` build has no updater next to it and `update` fails with a message saying so.
 
-## Run
+## Build and install
 
-From the repo directory:
-
-```bash
-task test
-task cli:install
-```
-
-`task --list` lists every command.
-
-To print one session to the terminal, from `macos/`:
+Requires macOS, Swift (SwiftPM), Go and [Task](https://taskfile.dev). From the repo directory:
 
 ```bash
-swift run promptscope-cli report grok ~/.grok/sessions/<cwd>/<id>
-swift run promptscope-cli report kiro-ide ~/.kiro/sessions/<workspace>/sess_<id>
-swift run promptscope-cli report kiro-cli ~/.kiro/sessions/cli/<id>.json
-swift run promptscope-cli report omp ~/.omp/agent/sessions/<cwd>/<id>.jsonl
-swift run promptscope-cli report pi ~/.pi/agent/sessions/<cwd>/<id>.jsonl
-swift run promptscope-cli report devin ~/.local/share/devin/cli/transcripts/<id>.json
-swift run promptscope-cli report dsh ~/.dsh/sessions/<cwd>/<id>/session.v4.jsonl.zstd
-swift run promptscope-cli scan
+task test          # go vet + go test (updater), then swift test (analyzer)
+task cli:install   # release CLI + updater into ~/.local/share/promptscope/bin, symlink ~/.local/bin/promptscope
+task cli:build     # release CLI only, built in macos/.build
 ```
 
-`task cli:install` puts the release CLI in `~/.local/share/promptscope/bin/` and points `~/.local/bin/promptscope` at it.
+`task --list` lists every command. `VERSION` is the version source of truth; `cli:install` and the release script stamp it into the CLI for the build only and restore the source file.
 
-The first scan reads the prefix of every Grok session (system prompt, skill catalog, MCP) and caches it in `~/Library/Application Support/Promptscope/digests.json`. Opening a session reads its full transcript.
+## CLI
 
-Sessions under `/tmp` and subagents are hidden by default.
+```
+promptscope scan
+promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path> [--json]
+promptscope update [--check] [--json] [--force]
+promptscope --version
+```
+
+`scan` lists how many sessions each source has and prints the notes for sources that were not found:
+
+```
+sessions 3008
+  Grok 1855
+  Kiro 74
+  Kiro CLI 90
+  ...
+empty cli skipped 11409
+```
+
+`report` measures one session and prints a plain-text report: standing prompt split by component, system prompt sections, skills, MCP servers, up to 20 tools, a one-line trajectory summary, Kiro steering files, and the context percent when the log has it. The source argument may also be a library id such as `dsh:<session>`; only the part before the colon is used.
+
+`report ... --json` writes one object with the keys `standing`, `transcript`, `sections`, `skills`, `mcp`, `tools`, `turns`, `heavy`, `steering`, `notes`, `contextPercent`, `contextWindow`, `promptTokens`, `truncated` and `entries`. Each entry of `entries` is one trajectory event: `at`, `turn`, `kind`, `label`, `bytes`, `durationMs`, `failed`, `tokens`. The window reads this output.
+
+The path is the session's locator:
+
+| Source | Path |
+| --- | --- |
+| Grok | `~/.grok/sessions/<encoded cwd>/<id>` (directory) |
+| Kiro IDE | `~/.kiro/sessions/<workspace>/sess_<id>` |
+| Kiro CLI | `~/.kiro/sessions/cli/<id>.json` (the `.jsonl` transcript sits next to it) |
+| OMP | `~/.omp/agent/sessions/<cwd>/<id>.jsonl` |
+| Pi | `~/.pi/agent/sessions/<cwd>/<id>.jsonl` |
+| Devin | `~/.local/share/devin/cli/transcripts/<name>.json` |
+| DSH | `~/.dsh/sessions/<cwd>/<id>/session.v4.jsonl.zstd` |
+
+Without an install, from `macos/` use `swift run promptscope-cli report <source> <path>`.
+
+Sessions under `/tmp` (and `/var/folders`) and subagents are marked as noise; the window hides them by default.
+
+## Window
+
+`promptscope-gpui` lives in `../ns-gpui`. It indexes the same session directories with its own Rust scanner, and runs the installed `promptscope` CLI for `report <source> <path> --json` when a session is opened and for `update --check --json` / `update`. The CLI must be installed for session pages to work. Build it from that repo:
+
+```bash
+cargo run --release -p promptscope-gpui      # run from source
+task dev:install:promptscope                 # installs "Promptscope Dev.app" into ~/Applications
+```
+
+Navigation:
+
+- **Sidebar**: Overview (all sessions, sessions by agent, prompt components, skills and MCP servers from the cache, scan notes), Replay (the library played back over 6 h, 24 h or 7 d), then one row per workspace.
+- **Workspace page**: stats for the current filters, plus the session list with search and source chips (All and one per agent). Rescan is in the page header and the right rail.
+- **Session page**: header (agent, last active, tokens, turns, reveal in Finder, copy, Details), previous/next session, then the tabs Conversation, Timeline, Context, Tool time and Events, with a filter for event kinds, failed events and turns. Below: Prompt breakdown with the tabs Standing, Skills, MCP, Tool cost and Notes.
+- **Settings** (right rail): check for and install CLI updates, and show or hide temporary and subagent sessions.
+
+In a narrow window the panes stack and the workspace page gets a Sessions / Overview toggle.
+
+The window reads `~/Library/Application Support/Promptscope/digests.json` if it exists, for the skill and MCP totals in the Overview and Workspace pages. The current CLI does not write that file; without it, opening a session still gives the full report and the totals stay empty.

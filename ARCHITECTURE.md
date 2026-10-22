@@ -11,7 +11,7 @@ promptscope-cli     scan and report
 PromptscopeKit      per-agent parsers, library scan, counting
 ```
 
-`promptscope-cli` imports `PromptscopeKit`. The Kit imports neither SwiftUI nor the CLI. Parsers do not live in the CLI. The window calls the installed CLI and does not link the Kit.
+`promptscope-cli` imports `PromptscopeKit`. The Kit imports neither SwiftUI nor the CLI. Parsers do not live in the CLI. The window does not link the Kit. It lists sessions with its own Rust scanner (same directories and noise rules) and calls the installed CLI for `report <source> <path> --json` and `update`.
 
 `promptscope update` is not in the Kit. The Swift CLI looks for `promptscope-update-X.Y.Z` next to itself and execs that Go binary. The Go binary downloads the assets `promptscope-vX.Y.Z-darwin-arm64` and `promptscope-update-vX.Y.Z-darwin-arm64`, checks the GitHub digest, then swaps the `~/.local/bin/promptscope` symlink.
 
@@ -25,4 +25,4 @@ Out of scope: UI in this repo, a command palette, an extension host, a daemon, c
 
 ## GitHub
 
-`ci.yml` runs `swift test` on macOS. `release.yml` packages the CLI on a `v*` tag.
+`ci.yml` runs `go vet`, `go test`, and `swift test` on macOS. `release.yml` runs `scripts/release-local.sh --publish` on a `v*` tag (CLI, updater, `SHA256SUMS`).
