@@ -58,30 +58,30 @@ enum DshAnalyzer {
             let data = object["data"] as? [String: Any] ?? [:]
             switch type {
             case "session":
-                version = dshInt(object["version"])
+                version = JSONValue.int(object["version"])
             case "turn/start":
                 sawTurn = true
-                currentTurn = dshInt(data["turn"]) ?? currentTurn + 1
+                currentTurn = JSONValue.int(data["turn"]) ?? currentTurn + 1
             case "step/start":
-                stepStart = dshMillis(object["time"])
+                stepStart = JSONValue.epochMillis(object["time"])
             case "turn/end":
                 let reason = (data["reason"] as? [String: Any])?["kind"] as? String ?? "completed"
-                trajectory.close(turnEntry, at: dshMillis(object["time"]))
+                trajectory.close(turnEntry, at: JSONValue.epochMillis(object["time"]))
                 if reason != "completed" {
                     trajectory.add(
-                        at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "error",
+                        at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1), kind: "error",
                         label: "turn \(reason)", failed: true
                     )
                 }
             case "llm/retry":
                 let failure = data["failure"] as? [String: Any] ?? [:]
-                let retry = dshInt(data["retry"]).map { " \($0)/\(dshInt(data["maxRetries"]) ?? 0)" } ?? ""
+                let retry = JSONValue.int(data["retry"]).map { " \($0)/\(JSONValue.int(data["maxRetries"]) ?? 0)" } ?? ""
                 trajectory.add(
-                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "retry",
+                    at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1), kind: "retry",
                     label: "retry\(retry) · " + PromptText.preview(
                         (failure["code"] as? String ?? "") + " " + (failure["message"] as? String ?? ""), limit: 70
                     ),
-                    durationMs: dshInt(data["delayMs"]), failed: true
+                    durationMs: JSONValue.int(data["delayMs"]), failed: true
                 )
             case "assistant/attempt":
                 for item in data["stream"] as? [[String: Any]] ?? [] {
@@ -91,7 +91,7 @@ enum DshAnalyzer {
                           reason["kind"] as? String == "error" else { continue }
                     let failure = reason["failure"] as? [String: Any] ?? [:]
                     trajectory.add(
-                        at: dshMillis(item["time"]) ?? dshMillis(object["time"]), turn: max(currentTurn, 1),
+                        at: JSONValue.epochMillis(item["time"]) ?? JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1),
                         kind: "error", label: "request failed · " + PromptText.preview(failure["message"] as? String ?? "", limit: 70),
                         failed: true
                     )
@@ -100,7 +100,7 @@ enum DshAnalyzer {
                 let id = data["jobId"] as? String ?? ""
                 let label = data["label"] as? String ?? "job"
                 let index = trajectory.add(
-                    at: dshInt(data["startedAt"]) ?? dshMillis(object["time"]), turn: max(currentTurn, 1),
+                    at: JSONValue.int(data["startedAt"]) ?? JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1),
                     kind: "job", label: PromptText.preview(label, limit: 70)
                 )
                 if !id.isEmpty { jobEntries[id] = index }
@@ -109,7 +109,7 @@ enum DshAnalyzer {
                 let detail = data["detail"] as? String ?? ""
                 let bad = status != "completed" || detail.contains("exit code:") && !detail.hasSuffix("exit code: 0")
                 let index = jobEntries[data["jobId"] as? String ?? ""]
-                trajectory.close(index, at: dshInt(data["finishedAt"]) ?? dshMillis(object["time"]), failed: bad)
+                trajectory.close(index, at: JSONValue.int(data["finishedAt"]) ?? JSONValue.epochMillis(object["time"]), failed: bad)
                 if let index, index < trajectory.count, status != "completed" {
                     trajectory[index].label += " · \(status)"
                 }
@@ -117,12 +117,12 @@ enum DshAnalyzer {
                 let todos = data["todos"] as? [[String: Any]] ?? []
                 let done = todos.filter { $0["status"] as? String == "completed" }.count
                 trajectory.add(
-                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                    at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
                     label: "todos \(done)/\(todos.count) done"
                 )
             case "model/selection":
                 trajectory.add(
-                    at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                    at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
                     label: "model → \(data["provider"] as? String ?? "?")/\(data["model"] as? String ?? "?")"
                 )
             case "system/message":
@@ -131,16 +131,16 @@ enum DshAnalyzer {
             case "user/message":
                 let source = data["source"] as? [String: Any] ?? [:]
                 let kind = source["kind"] as? String ?? ""
-                let text = dshContentText(data["content"])
+                let text = JSONValue.contentText(data["content"])
                 switch kind {
                 case "agent-instructions":
                     rulesBytes = text.utf8.count
                 case "skill-catalog":
                     catalogBytes = text.utf8.count
-                    skills = dshParseSkills(text)
+                    skills = parseCatalogSkills(text, pattern: #"(?m)^[ \t]*- `([^`]+)`:\s*"#, origin: "catalog")
                 case "skill-invocation":
                     trajectory.add(
-                        at: dshMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
+                        at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, 1), kind: "notice",
                         label: "skill invoked · " + PromptText.preview(text, limit: 60), bytes: text.utf8.count
                     )
                 case "runtime-context":
@@ -150,7 +150,7 @@ enum DshAnalyzer {
                 case "user":
                     if inTurn { closeTurn() }
                     trajectory.append(TrajectoryEntry(
-                        index: trajectory.count, at: dshMillis(object["time"]), turn: max(currentTurn, turnIndex + 1),
+                        index: trajectory.count, at: JSONValue.epochMillis(object["time"]), turn: max(currentTurn, turnIndex + 1),
                         kind: "user", label: PromptText.preview(text, limit: 80), bytes: text.utf8.count
                     ))
                     turnEntry = trajectory.count - 1
@@ -184,7 +184,7 @@ enum DshAnalyzer {
                     model = dshNonEmpty(config["model"]) ?? model
                 }
             case "request/context":
-                contextWindow = dshInt(data["contextWindow"]) ?? contextWindow
+                contextWindow = JSONValue.int(data["contextWindow"]) ?? contextWindow
                 model = dshNonEmpty(data["model"]) ?? model
             case "tool/call":
                 let name = data["name"] as? String ?? "tool"
@@ -192,7 +192,7 @@ enum DshAnalyzer {
                 if !callID.isEmpty { callNames[callID] = name }
                 let arguments = data["arguments"] as? String ?? ""
                 let index = trajectory.add(
-                    at: dshMillis(object["time"]), turn: currentTurn,
+                    at: JSONValue.epochMillis(object["time"]), turn: currentTurn,
                     kind: TrailLabel.isSubagent(name) ? "subagent" : "tool",
                     label: TrailLabel.tool(name, arguments), bytes: arguments.utf8.count
                 )
@@ -204,7 +204,7 @@ enum DshAnalyzer {
                 let message = data["message"] as? [String: Any] ?? [:]
                 let callID = message["toolCallId"] as? String ?? ""
                 let name = callNames[callID] ?? "tool"
-                let body = dshContentText(message["content"])
+                let body = JSONValue.contentText(message["content"])
                 let size = body.utf8.count
                 var row = tools[name] ?? ToolMeasure(name: name)
                 row.resultBytes += size
@@ -213,14 +213,14 @@ enum DshAnalyzer {
                 replyBytes += size
                 if size > 0 { heavy.append((name, size)) }
                 let failed = message["isError"] as? Bool ?? false
-                trajectory.close(callEntries[callID], at: dshMillis(object["time"]), bytes: size, failed: failed)
+                trajectory.close(callEntries[callID], at: JSONValue.epochMillis(object["time"]), bytes: size, failed: failed)
             case "assistant/message":
                 let message = data["message"] as? [String: Any] ?? [:]
-                let at = dshMillis(object["time"])
+                let at = JSONValue.epochMillis(object["time"])
                 let began = stepStart ?? at
                 let usage = data["usage"] as? [String: Any]
                 // The prompt the provider saw is fresh input plus the cached prefix.
-                let input = dshInt(usage?["inputTokens"]).map { $0 + (dshInt(usage?["cacheReadTokens"]) ?? 0) }
+                let input = JSONValue.int(usage?["inputTokens"]).map { $0 + (JSONValue.int(usage?["cacheReadTokens"]) ?? 0) }
                 let parts = message["content"] as? [[String: Any]] ?? []
                 var first = true
                 func think() -> Int? {
@@ -262,22 +262,22 @@ enum DshAnalyzer {
             case "compaction/start":
                 let id = data["compactionId"] as? String ?? ""
                 let index = trajectory.add(
-                    at: dshMillis(object["time"]), turn: currentTurn, kind: "compaction", label: "compaction"
+                    at: JSONValue.epochMillis(object["time"]), turn: currentTurn, kind: "compaction", label: "compaction"
                 )
                 if !id.isEmpty { compactionEntries[id] = index }
             case "compaction/summary":
                 let index = compactionEntries[data["compactionId"] as? String ?? ""]
                 if let index, index < trajectory.count {
-                    let hidden = dshInt(data["shadowedTokenCount"]) ?? 0
-                    let summary = dshContentText(data["summary"]).utf8.count
+                    let hidden = JSONValue.int(data["shadowedTokenCount"]) ?? 0
+                    let summary = JSONValue.contentText(data["summary"]).utf8.count
                     trajectory[index].bytes = summary
                     trajectory[index].label = "compaction · \(hidden) tokens → summary"
                 }
             case "compaction/end":
-                trajectory.close(compactionEntries[data["compactionId"] as? String ?? ""], at: dshMillis(object["time"]))
+                trajectory.close(compactionEntries[data["compactionId"] as? String ?? ""], at: JSONValue.epochMillis(object["time"]))
             case "compaction/prune":
                 prunedRanges += 1
-                prunedTokens += dshInt(data["shadowedTokenCount"]) ?? 0
+                prunedTokens += JSONValue.int(data["shadowedTokenCount"]) ?? 0
             default:
                 break
             }
@@ -313,8 +313,8 @@ enum DshAnalyzer {
         }
         return SessionReport(
             ref: reportRef,
-            standing: dshPack(standing),
-            transcript: dshPack(transcript),
+            standing: Slice.pack(standing),
+            transcript: Slice.pack(transcript),
             sections: [],
             skills: skills,
             mcp: mcpServers(tools.values),
@@ -369,13 +369,13 @@ enum DshLog {
             guard let object = JSONFile.lineObject(String(line)) else { continue }
             switch object["type"] as? String {
             case "session":
-                header.version = dshInt(object["version"])
+                header.version = JSONValue.int(object["version"])
                 header.id = dshNonEmpty(object["id"]) ?? header.id
                 header.cwd = object["cwd"] as? String ?? header.cwd
-                if let millis = dshInt(object["createdAt"]) {
+                if let millis = JSONValue.int(object["createdAt"]) {
                     header.created = Date(timeIntervalSince1970: Double(millis) / 1000)
                 }
-                header.subagent = (dshInt(object["delegationDepth"]) ?? 0) > 0
+                header.subagent = (JSONValue.int(object["delegationDepth"]) ?? 0) > 0
                 header.agent = dshNonEmpty(object["agentPreset"])
             case "request/context":
                 let data = object["data"] as? [String: Any] ?? [:]
@@ -384,7 +384,7 @@ enum DshLog {
                 let data = object["data"] as? [String: Any] ?? [:]
                 let source = data["source"] as? [String: Any] ?? [:]
                 if source["kind"] as? String == "user", header.title.isEmpty {
-                    header.title = PromptText.preview(dshContentText(data["content"]), limit: 90)
+                    header.title = PromptText.preview(JSONValue.contentText(data["content"]), limit: 90)
                 }
             case "turn/start":
                 header.hasTurn = true
@@ -414,50 +414,9 @@ struct DshHeader {
 
 private func dshMessageText(_ message: Any?) -> String {
     guard let message = message as? [String: Any] else { return "" }
-    return dshContentText(message["content"])
+    return JSONValue.contentText(message["content"])
 }
 
-private func dshContentText(_ content: Any?) -> String {
-    guard let parts = content as? [Any] else { return "" }
-    return parts.compactMap { ($0 as? [String: Any])?["text"] as? String }.joined(separator: "\n")
-}
-
-/// Catalog rows look like ``- `name`: summary``.
-private func dshParseSkills(_ text: String) -> [SkillMeasure] {
-    let pattern = #"(?m)^[ \t]*- `([^`]+)`:\s*"#
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let ns = text as NSString
-    let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-    var order: [String] = []
-    var byName: [String: SkillMeasure] = [:]
-    for (index, match) in matches.enumerated() {
-        let name = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { continue }
-        let start = match.range.location
-        let end = index + 1 < matches.count ? matches[index + 1].range.location : ns.length
-        let block = ns.substring(with: NSRange(location: start, length: max(end - start, 0)))
-        let measure = SkillMeasure(
-            name: name,
-            catalogBytes: block.utf8.count,
-            summary: PromptText.preview(block, limit: 180),
-            path: nil,
-            origin: "catalog"
-        )
-        if var existing = byName[name] {
-            if measure.catalogBytes > existing.catalogBytes {
-                existing.catalogBytes = measure.catalogBytes
-                existing.summary = measure.summary
-            }
-            byName[name] = existing
-        } else {
-            order.append(name)
-            byName[name] = measure
-        }
-    }
-    return order.compactMap { byName[$0] }
-}
-
-/// `mcp__server__tool` is one flat list in the header. The server is the middle piece.
 /// `mcp__server__tool` is one flat list in the header. The server is the middle piece.
 private func mcpServers(_ tools: Dictionary<String, ToolMeasure>.Values) -> [McpMeasure] {
     var grouped: [String: [ToolMeasure]] = [:]
@@ -477,25 +436,6 @@ private func mcpServers(_ tools: Dictionary<String, ToolMeasure>.Values) -> [Mcp
             tools: names,
             blurb: ""
         )
-    }
-}
-
-private func dshMillis(_ value: Any?) -> Int? {
-    guard let number = dshInt(value), number > 1_000_000_000_000 else { return nil }
-    return number
-}
-
-private func dshInt(_ value: Any?) -> Int? {
-    if let number = value as? Int { return number }
-    if let number = value as? Double { return Int(number) }
-    if let number = value as? NSNumber { return number.intValue }
-    return nil
-}
-
-private func dshPack(_ map: [SliceKind: Int]) -> [Slice] {
-    SliceKind.allCases.compactMap { kind in
-        guard let bytes = map[kind], bytes > 0 else { return nil }
-        return Slice(kind: kind, bytes: bytes)
     }
 }
 

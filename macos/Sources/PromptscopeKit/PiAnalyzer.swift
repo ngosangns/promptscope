@@ -75,7 +75,7 @@ private struct Accumulator {
         switch role {
         case "user":
             closeTurn()
-            let text = contentText(message["content"])
+            let text = JSONValue.contentText(message["content"])
             turnIndex += 1
             turnPreview = PromptText.preview(text, limit: 140)
             trajectory.add(
@@ -89,7 +89,7 @@ private struct Accumulator {
         case "assistant":
             consumeAssistant(message, object)
         case "toolResult":
-            let text = contentText(message["content"])
+            let text = JSONValue.contentText(message["content"])
             let name = message["toolName"] as? String ?? "tool"
             add(.toolResult, text.utf8.count, standing: false)
             noteTool(name, call: false, result: text.utf8.count)
@@ -107,7 +107,7 @@ private struct Accumulator {
             }
             replyBytes += text.utf8.count
         default:
-            let text = contentText(message["content"])
+            let text = JSONValue.contentText(message["content"])
             add(.other, text.utf8.count, standing: false)
             replyBytes += text.utf8.count
         }
@@ -150,8 +150,8 @@ private struct Accumulator {
         }
         return SessionReport(
             ref: ref,
-            standing: slices(standing),
-            transcript: slices(transcript),
+            standing: Slice.pack(standing),
+            transcript: Slice.pack(transcript),
             sections: sections,
             skills: skills.sorted { $0.catalogBytes > $1.catalogBytes },
             mcp: mcp,
@@ -211,10 +211,10 @@ private struct Accumulator {
         // OMP records the span itself: `duration`, `ttft`, `completedAt`.
         let started = Clock.millis(message["timestamp"])
         let finished = Clock.millis(message["completedAt"]) ?? Clock.millis(object["timestamp"])
-        let span = jsonDouble(message["duration"]).map { Int($0) }
+        let span = JSONValue.double(message["duration"]).map { Int($0) }
             ?? { if let started, let finished, finished >= started { return finished - started } else { return nil } }()
         let usage = message["usage"] as? [String: Any]
-        let prompt = usage.map { (jsonInt($0["input"]) ?? 0) + (jsonInt($0["cacheRead"]) ?? 0) }.flatMap { $0 > 0 ? $0 : nil }
+        let prompt = usage.map { (JSONValue.int($0["input"]) ?? 0) + (JSONValue.int($0["cacheRead"]) ?? 0) }.flatMap { $0 > 0 ? $0 : nil }
         var first = true
         func lead() -> Int? { defer { first = false }; return first ? span : nil }
         for part in parts {
@@ -277,8 +277,8 @@ private struct Accumulator {
         let turn = max(turnIndex, 1)
         switch type {
         case "compaction":
-            let before = jsonInt(object["tokensBefore"])
-            let after = jsonInt(object["tokensAfter"])
+            let before = JSONValue.int(object["tokensBefore"])
+            let after = JSONValue.int(object["tokensAfter"])
             let method = object["method"] as? String ?? "compaction"
             let range = (before != nil && after != nil) ? " \(before!) → \(after!) tokens" : ""
             trajectory.add(
@@ -308,10 +308,10 @@ private struct Accumulator {
                     label: "session ended · \(reason)", failed: data?["kind"] as? String == "signal"
                 )
             case "goal-completed":
-                let used = jsonInt(data?["tokensUsed"]).map { " · \($0) tokens" } ?? ""
+                let used = JSONValue.int(data?["tokensUsed"]).map { " · \($0) tokens" } ?? ""
                 trajectory.add(
                     at: at, turn: turn, kind: "notice", label: "goal completed\(used)",
-                    durationMs: jsonInt(data?["timeUsedSeconds"]).map { $0 * 1000 }
+                    durationMs: JSONValue.int(data?["timeUsedSeconds"]).map { $0 * 1000 }
                 )
             default:
                 break
@@ -331,7 +331,7 @@ private struct Accumulator {
             case "async-result":
                 let job = (details?["jobs"] as? [[String: Any]])?.first
                 label = "background job done · " + PromptText.preview(job?["label"] as? String ?? "", limit: 50)
-                duration = jsonInt(job?["durationMs"])
+                duration = JSONValue.int(job?["durationMs"])
             case "irc:incoming":
                 label = "message from agent " + (details?["from"] as? String ?? "?")
             case "thinking-loop-redirect", "tool-call-loop-redirect", "todo-error-reminder", "interrupted-thinking":
@@ -348,11 +348,11 @@ private struct Accumulator {
 
     private mutating func noteUsage(_ message: [String: Any]) {
         guard let usage = message["usage"] as? [String: Any] else { return }
-        let input = jsonInt(usage["input"]) ?? 0
-        let cache = jsonInt(usage["cacheRead"]) ?? 0
+        let input = JSONValue.int(usage["input"]) ?? 0
+        let cache = JSONValue.int(usage["cacheRead"]) ?? 0
         let total = input + cache
         if total > 0 { promptTokens = total }
-        if let percent = jsonDouble(usage["contextPercent"]), percent > 0 {
+        if let percent = JSONValue.double(usage["contextPercent"]), percent > 0 {
             contextPercent = percent
             if total > 0 {
                 let raw = Double(total) / (percent / 100)
@@ -361,7 +361,7 @@ private struct Accumulator {
             }
         }
         if let snap = message["contextSnapshot"] as? [String: Any] {
-            nonMessageTokens = jsonInt(snap["nonMessageTokens"]) ?? nonMessageTokens
+            nonMessageTokens = JSONValue.int(snap["nonMessageTokens"]) ?? nonMessageTokens
         }
     }
 
@@ -524,15 +524,6 @@ private func xmlAttribute(_ name: String, _ text: String) -> String? {
     return String(rest[..<end])
 }
 
-private func contentText(_ content: Any?) -> String {
-    if let text = content as? String { return text }
-    guard let parts = content as? [Any] else { return "" }
-    return parts.compactMap { part -> String? in
-        guard let item = part as? [String: Any] else { return nil }
-        return item["text"] as? String
-    }.joined(separator: "\n")
-}
-
 private func argumentText(_ arguments: Any?) -> String {
     if let text = arguments as? String { return PromptText.normalizeSlashes(text) }
     guard let arguments, JSONSerialization.isValidJSONObject(arguments),
@@ -540,17 +531,3 @@ private func argumentText(_ arguments: Any?) -> String {
     return PromptText.normalizeSlashes(String(decoding: data, as: UTF8.self))
 }
 
-
-private func jsonInt(_ value: Any?) -> Int? {
-    if let number = value as? Int { return number }
-    if let number = value as? Double { return Int(number) }
-    if let number = value as? NSNumber { return number.intValue }
-    return nil
-}
-
-private func jsonDouble(_ value: Any?) -> Double? {
-    if let number = value as? Double { return number }
-    if let number = value as? Int { return Double(number) }
-    if let number = value as? NSNumber { return number.doubleValue }
-    return nil
-}

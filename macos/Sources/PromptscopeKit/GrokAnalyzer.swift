@@ -79,7 +79,7 @@ enum GrokAnalyzer {
             guard let object = JSONFile.lineObject(line) else { return true }
             let type = object["type"] as? String ?? ""
             let reason = object["synthetic_reason"] as? String
-            let text = messageText(object["content"])
+            let text = JSONValue.contentText(object["content"])
             let textBytes = text.utf8.count
 
             if type == "compaction_meta" || reason == "compaction_meta" {
@@ -239,7 +239,7 @@ enum GrokAnalyzer {
         notes.append("Tokens are a byte/4 estimate, not the model's tokenizer.")
         notes.append("MCP tool schemas are not part of the prompt. Grok loads them through search_tool. The MCP figure here is the server description block.")
 
-        let standing = compact([
+        let standing = Slice.nonEmpty([
             Slice(kind: .system, bytes: systemBytes > 0 ? systemBytes : (transcript[.system] ?? 0)),
             Slice(kind: .skills, bytes: standingSkills),
             Slice(kind: .mcp, bytes: standingMcp),
@@ -323,13 +323,13 @@ private func streamTrajectory(_ url: URL) -> (entries: [TrajectoryEntry], trunca
               let kind = update["sessionUpdate"] as? String else { return true }
         let meta = params["_meta"] as? [String: Any]
         let at = Clock.millis(meta?["agentTimestampMs"]) ?? Clock.millis(object["timestamp"])
-        if let used = grokInt(meta?["totalTokens"]), used > 0 { promptTokens = used }
+        if let used = JSONValue.int(meta?["totalTokens"]), used > 0 { promptTokens = used }
         let content = update["content"] as? [String: Any]
         let text = content?["text"] as? String ?? ""
 
         switch kind {
         case "user_message_chunk":
-            let index = grokInt((update["_meta"] as? [String: Any])?["promptIndex"])
+            let index = JSONValue.int((update["_meta"] as? [String: Any])?["promptIndex"])
             if let last = lastChunk, last.kind == "user", last.index < entries.count,
                index == nil || index.map({ $0 + 1 }) == entries[last.index].turn {
                 entries[last.index].bytes += text.utf8.count
@@ -374,23 +374,23 @@ private func streamTrajectory(_ url: URL) -> (entries: [TrajectoryEntry], trunca
             entries.close(index, at: at, bytes: output, failed: failed)
         case "auto_compact_started":
             lastChunk = nil
-            let used = grokInt(update["tokens_used"])
+            let used = JSONValue.int(update["tokens_used"])
             compactionAt = entries.add(
                 at: at, turn: max(turn, 1), kind: "compaction",
                 label: used.map { "compaction at \($0) tokens" } ?? "compaction started", tokens: used
             )
         case "auto_compact_completed":
             if let index = compactionAt, index < entries.count {
-                if let before = grokInt(update["tokens_before"]), let after = grokInt(update["tokens_after"]) {
+                if let before = JSONValue.int(update["tokens_before"]), let after = JSONValue.int(update["tokens_after"]) {
                     entries[index].label = "compaction \(before) → \(after) tokens"
                 }
-                if let ms = grokInt(update["elapsed_ms"]) { entries[index].durationMs = ms }
+                if let ms = JSONValue.int(update["elapsed_ms"]) { entries[index].durationMs = ms }
             }
             compactionAt = nil
-            promptTokens = grokInt(update["tokens_after"]) ?? promptTokens
+            promptTokens = JSONValue.int(update["tokens_after"]) ?? promptTokens
         case "retry_state":
             lastChunk = nil
-            let attempt = grokInt(update["attempt"]).map { " \($0)/\(grokInt(update["max_retries"]) ?? 0)" } ?? ""
+            let attempt = JSONValue.int(update["attempt"]).map { " \($0)/\(JSONValue.int(update["max_retries"]) ?? 0)" } ?? ""
             entries.add(
                 at: at, turn: max(turn, 1), kind: "retry",
                 label: "retry\(attempt) · " + PromptText.preview(update["reason"] as? String ?? "", limit: 60), failed: true
@@ -399,7 +399,7 @@ private func streamTrajectory(_ url: URL) -> (entries: [TrajectoryEntry], trunca
             lastChunk = nil
             let reason = update["stop_reason"] as? String ?? "end_turn"
             if let index = entries.lastIndex(where: { $0.kind == "user" && $0.turn == max(turn, 1) }),
-               let ms = grokInt(update["elapsed_ms"]), entries[index].durationMs == nil {
+               let ms = JSONValue.int(update["elapsed_ms"]), entries[index].durationMs == nil {
                 entries[index].durationMs = ms
             }
             if reason != "end_turn" {
@@ -411,32 +411,6 @@ private func streamTrajectory(_ url: URL) -> (entries: [TrajectoryEntry], trunca
         return true
     }
     return (entries, truncated)
-}
-
-private func grokInt(_ value: Any?) -> Int? {
-    if let number = value as? Int { return number }
-    if let number = value as? Double { return Int(number) }
-    if let number = value as? NSNumber { return number.intValue }
-    return nil
-}
-
-private func compact(_ slices: [Slice]) -> [Slice] {
-    slices.filter { $0.bytes > 0 }
-}
-
-private func messageText(_ content: Any?) -> String {
-    if let text = content as? String { return text }
-    if let parts = content as? [[String: Any]] {
-        return parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
-    }
-    if let parts = content as? [Any] {
-        return parts.compactMap { item -> String? in
-            if let text = item as? String { return text }
-            if let object = item as? [String: Any] { return object["text"] as? String }
-            return nil
-        }.joined(separator: "\n")
-    }
-    return ""
 }
 
 private func encryptedBytes(_ object: [String: Any]) -> Int {
@@ -521,15 +495,6 @@ private func attachDisk(_ skills: [SkillMeasure]) -> [SkillMeasure] {
         var copy = skill
         copy.diskBytes = SkillFiles.diskBytes(skill.path)
         return copy
-    }
-}
-
-private func considerHeavy(_ heavy: inout [(String, Int)], tool: String, bytes: Int) {
-    guard bytes > 0 else { return }
-    if heavy.count < 8 || bytes > heavy[heavy.count - 1].1 {
-        heavy.append((tool, bytes))
-        heavy.sort { $0.1 > $1.1 }
-        if heavy.count > 8 { heavy.removeLast(heavy.count - 8) }
     }
 }
 

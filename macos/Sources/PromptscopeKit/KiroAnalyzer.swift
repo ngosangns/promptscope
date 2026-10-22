@@ -69,7 +69,7 @@ enum KiroIDEAnalyzer {
                 let name = payload["toolName"] as? String ?? "tool"
                 let id = payload["toolCallId"] as? String ?? ""
                 if !id.isEmpty { callNames[id] = name }
-                let args = jsonText(payload["args"])
+                let args = JSONValue.string(payload["args"])
                 add(.other, args.utf8.count)
                 bumpTool(&tools, name: name, call: true, result: 0)
                 absorbSkills(args, into: &skills)
@@ -81,7 +81,7 @@ enum KiroIDEAnalyzer {
                 )
                 if !id.isEmpty { callEntries[id] = index }
             case "tool_result":
-                let text = payload["content"] as? String ?? jsonText(payload["content"])
+                let text = payload["content"] as? String ?? JSONValue.string(payload["content"])
                 let bytes = text.utf8.count
                 add(.toolResult, bytes)
                 turnReply += bytes
@@ -135,14 +135,14 @@ enum KiroIDEAnalyzer {
             case "session_metadata":
                 if payload["key"] as? String == "contextUsage" {
                     let value = payload["value"] as? [String: Any]
-                    contextPercent = number(value?["usagePercentage"]) ?? contextPercent
+                    contextPercent = JSONValue.double(value?["usagePercentage"]) ?? contextPercent
                 }
             case "usage_summary":
                 let rows = payload["promptTurnSummaries"] as? [[String: Any]] ?? []
                 var turnCredits = 0.0
-                for row in rows { turnCredits += number(row["usage"]) ?? 0 }
+                for row in rows { turnCredits += JSONValue.double(row["usage"]) ?? 0 }
                 credits += turnCredits
-                let elapsed = number(payload["elapsedTime"]).map { Int($0) }
+                let elapsed = JSONValue.double(payload["elapsedTime"]).map { Int($0) }
                 let used = Set(rows.flatMap { $0["usedTools"] as? [String] ?? [] }).count
                 trajectory.add(
                     at: at, turn: max(turns.count, 1), kind: "notice",
@@ -173,7 +173,7 @@ enum KiroIDEAnalyzer {
         }
 
         let steeringBytes = steering.reduce(0) { $0 + $1.bytes }
-        let standing = compact([
+        let standing = Slice.nonEmpty([
             Slice(kind: .steering, bytes: steeringBytes),
         ])
         return SessionReport(
@@ -291,7 +291,7 @@ enum KiroCLIAnalyzer {
                         let name = payload["name"] as? String ?? "tool"
                         let id = payload["toolUseId"] as? String ?? ""
                         if !id.isEmpty { callNames[id] = name }
-                        let args = jsonText(payload["input"])
+                        let args = JSONValue.string(payload["input"])
                         add(.other, args.utf8.count)
                         bumpTool(&tools, name: name, call: true, result: 0)
                         absorbSkills(args, into: &skills)
@@ -337,7 +337,7 @@ enum KiroCLIAnalyzer {
         for (turn, meta) in metas.enumerated() {
             guard let first = turnFirst[turn], let last = turnLast[turn] else { continue }
             let seconds = (meta["turn_duration"] as? [String: Any]).map {
-                (number($0["secs"]) ?? 0) + (number($0["nanos"]) ?? 0) / 1_000_000_000
+                (JSONValue.double($0["secs"]) ?? 0) + (JSONValue.double($0["nanos"]) ?? 0) / 1_000_000_000
             } ?? 0
             let end = kiroMillis(meta["end_timestamp"])
             let begin = trajectory[first].at ?? end.map { $0 - Int(seconds * 1000) }
@@ -348,14 +348,14 @@ enum KiroCLIAnalyzer {
                 trajectory[index].at = begin + span * (index - first) / count
                 interpolated = true
             }
-            let requests = Int(number(meta["total_request_count"]) ?? 0)
-            let credits = (meta["metering_usage"] as? [[String: Any]] ?? []).reduce(0.0) { $0 + (number($1["value"]) ?? 0) }
+            let requests = Int(JSONValue.double(meta["total_request_count"]) ?? 0)
+            let credits = (meta["metering_usage"] as? [[String: Any]] ?? []).reduce(0.0) { $0 + (JSONValue.double($1["value"]) ?? 0) }
             let ended = meta["end_reason"] as? String ?? "UserTurnEnd"
             trajectory.add(
                 at: end ?? begin + span, turn: turn + 1, kind: "notice",
                 label: String(format: "turn done · %d requests · %.2f credits · %@", requests, credits, meta["model"] as? String ?? "?"),
                 durationMs: Int(seconds * 1000), failed: ended != "UserTurnEnd",
-                tokens: number(meta["final_context_usage_percentage"]).flatMap { percent in
+                tokens: JSONValue.double(meta["final_context_usage_percentage"]).flatMap { percent in
                     contextWindow.map { Int(percent / 100 * Double($0)) }
                 }
             )
@@ -394,8 +394,8 @@ func cliContext(_ object: [String: Any]) -> (percent: Double?, window: Int?, mod
     let usage = conv?["last_context_usage"] as? [String: Any]
     let rts = state?["rts_model_state"] as? [String: Any]
     let info = rts?["model_info"] as? [String: Any]
-    let percent = number(usage?["percentage"]) ?? number(rts?["context_usage_percentage"])
-    let window = (number(info?["context_window_tokens"])).map { Int($0) }
+    let percent = JSONValue.double(usage?["percentage"]) ?? JSONValue.double(rts?["context_usage_percentage"])
+    let window = (JSONValue.double(info?["context_window_tokens"])).map { Int($0) }
     let model = info?["model_id"] as? String ?? usage?["model_id"] as? String
     let agent = state?["agent_name"] as? String
     return (percent, window, model, agent)
@@ -446,20 +446,11 @@ private func pathOf(_ value: String) -> String {
 
 func partText(_ content: Any?) -> String {
     if let text = content as? String { return text }
-    guard let parts = content as? [[String: Any]] else { return jsonText(content) }
+    guard let parts = content as? [[String: Any]] else { return JSONValue.string(content) }
     return parts.compactMap { part -> String? in
         if part["kind"] as? String == "text" { return part["data"] as? String }
         return nil
     }.joined(separator: "\n")
-}
-
-private func jsonText(_ value: Any?) -> String {
-    guard let value else { return "" }
-    if let text = value as? String { return text }
-    if JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value) {
-        return String(decoding: data, as: UTF8.self)
-    }
-    return ""
 }
 
 private func stringBytes(_ value: Any?) -> Int {
@@ -475,29 +466,7 @@ private func stringBytes(_ value: Any?) -> Int {
     }
 }
 
-private func considerHeavy(_ heavy: inout [(String, Int)], tool: String, bytes: Int) {
-    guard bytes > 0 else { return }
-    if heavy.count < 8 || bytes > heavy[heavy.count - 1].1 {
-        heavy.append((tool, bytes))
-        heavy.sort { $0.1 > $1.1 }
-        if heavy.count > 8 { heavy.removeLast(heavy.count - 8) }
-    }
-}
-
-private func compact(_ slices: [Slice]) -> [Slice] {
-    slices.filter { $0.bytes > 0 }
-}
-
 private func kiroMillis(_ value: Any?) -> Int? {
     guard let text = value as? String, let date = Dates.parse(text) else { return nil }
     return Int(date.timeIntervalSince1970 * 1000)
-}
-
-private func number(_ value: Any?) -> Double? {
-    switch value {
-    case let number as Double: return number
-    case let number as Int: return Double(number)
-    case let number as NSNumber: return number.doubleValue
-    default: return nil
-    }
 }

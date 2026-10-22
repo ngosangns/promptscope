@@ -63,7 +63,7 @@ enum DevinAnalyzer {
                 switch kind {
                 case .skills:
                     standing[.skills] = message.utf8.count
-                    skills = parseSkills(message)
+                    skills = parseCatalogSkills(message, pattern: #"(?m)^[ \t]*- \*\*([^*]+)\*\*:\s*"#, origin: "unknown")
                 case .mcp:
                     standing[.mcp] = message.utf8.count
                     mcp = parseMcp(message)
@@ -72,7 +72,7 @@ enum DevinAnalyzer {
                 case .summary:
                     summaryBytes = message.utf8.count
                     trajectory.add(
-                        at: devinMillis(step["timestamp"]), turn: max(turnIndex, 1), kind: "compaction",
+                        at: Clock.millis(step["timestamp"]), turn: max(turnIndex, 1), kind: "compaction",
                         label: "continued from a summary", bytes: message.utf8.count
                     )
                 case .system:
@@ -85,21 +85,21 @@ enum DevinAnalyzer {
                 turnIndex += 1
                 openPreview = PromptText.preview(message, limit: 140)
                 trajectory.add(
-                    at: devinMillis(step["timestamp"]), turn: turnIndex, kind: "user", label: openPreview, bytes: message.utf8.count
+                    at: Clock.millis(step["timestamp"]), turn: turnIndex, kind: "user", label: openPreview, bytes: message.utf8.count
                 )
                 userBytes = message.utf8.count
                 replyBytes = 0
                 inTurn = true
                 transcript[.user, default: 0] += message.utf8.count
-                lastUser = devinMillis(step["timestamp"])
+                lastUser = Clock.millis(step["timestamp"])
             case "agent":
                 transcript[.assistant, default: 0] += message.utf8.count
                 let reasoning = step["reasoning_content"] as? String ?? ""
                 transcript[.reasoning, default: 0] += reasoning.utf8.count
                 replyBytes += message.utf8.count + reasoning.utf8.count
-                let at = devinMillis(step["timestamp"])
+                let at = Clock.millis(step["timestamp"])
                 let metrics = step["metrics"] as? [String: Any]
-                let prompt = metrics.flatMap { jsonInt($0["prompt_tokens"]) }
+                let prompt = metrics.flatMap { JSONValue.int($0["prompt_tokens"]) }
                 if let prompt { promptTokens = prompt }
                 // The agent stamp is the end of the step. Only the step right after a user
                 // message has a clean model latency; later gaps also hold the previous tool run.
@@ -172,8 +172,8 @@ enum DevinAnalyzer {
         }
         return SessionReport(
             ref: ref,
-            standing: pack(standing),
-            transcript: pack(transcript),
+            standing: Slice.pack(standing),
+            transcript: Slice.pack(transcript),
             sections: sections,
             skills: skills,
             mcp: mcp,
@@ -221,40 +221,6 @@ private func sectionName(_ message: String, _ kind: DevinKind) -> String {
         let line = message.split(whereSeparator: \.isNewline).first.map(String.init) ?? "system"
         return PromptText.preview(line, limit: 48)
     }
-}
-
-private func parseSkills(_ text: String) -> [SkillMeasure] {
-    let pattern = #"(?m)^[ \t]*- \*\*([^*]+)\*\*:\s*"#
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let ns = text as NSString
-    let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-    var order: [String] = []
-    var byName: [String: SkillMeasure] = [:]
-    for (index, match) in matches.enumerated() {
-        let name = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { continue }
-        let start = match.range.location
-        let end = index + 1 < matches.count ? matches[index + 1].range.location : ns.length
-        let block = ns.substring(with: NSRange(location: start, length: max(end - start, 0)))
-        let measure = SkillMeasure(
-            name: name,
-            catalogBytes: block.utf8.count,
-            summary: PromptText.preview(block, limit: 180),
-            path: nil,
-            origin: "unknown"
-        )
-        if var existing = byName[name] {
-            if measure.catalogBytes > existing.catalogBytes {
-                existing.catalogBytes = measure.catalogBytes
-                existing.summary = measure.summary
-            }
-            byName[name] = existing
-        } else {
-            order.append(name)
-            byName[name] = measure
-        }
-    }
-    return order.compactMap { byName[$0] }
 }
 
 private func parseMcp(_ text: String) -> [McpMeasure] {
@@ -305,15 +271,6 @@ private func bump(_ skills: inout [SkillMeasure], _ name: String, path: String?)
     ))
 }
 
-private func pack(_ map: [SliceKind: Int]) -> [Slice] {
-    SliceKind.allCases.compactMap { kind in
-        guard let bytes = map[kind], bytes > 0 else { return nil }
-        return Slice(kind: kind, bytes: bytes)
-    }
-}
-
-private func devinMillis(_ value: Any?) -> Int? { Clock.millis(value) }
-
 private func devinLabel(_ name: String, _ arguments: [String: Any]?) -> String {
     guard let arguments else { return name }
     if name == "mcp_call_tool" {
@@ -325,11 +282,4 @@ private func devinLabel(_ name: String, _ arguments: [String: Any]?) -> String {
         return "subagent · " + PromptText.preview(arguments["title"] as? String ?? arguments["task"] as? String ?? "", limit: 60)
     }
     return TrailLabel.tool(name, arguments)
-}
-
-private func jsonInt(_ value: Any?) -> Int? {
-    if let number = value as? Int { return number }
-    if let number = value as? Double { return Int(number) }
-    if let number = value as? NSNumber { return number.intValue }
-    return nil
 }
