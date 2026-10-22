@@ -45,7 +45,7 @@ set +e
 "${OUTDIR}/${CLI_ASSET}" >/dev/null 2>&1
 cli_status=$?
 set -e
-[[ "$cli_status" -eq 1 ]] || { echo "CLI exit ${cli_status}, expected 1 for a missing command" >&2; exit 1; }
+[[ "$cli_status" -eq 2 ]] || { echo "CLI exit ${cli_status}, expected 2 (usage) for a missing command" >&2; exit 1; }
 
 echo "Building updater..."
 UPDATER_ASSET="promptscope-update-v${VER}-darwin-arm64"
