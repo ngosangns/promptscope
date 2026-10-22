@@ -5,13 +5,15 @@ Promptscope reads local logs and counts bytes. The core is the Swift target `Pro
 ## Dependency direction
 
 ```
-promptscope-cli     scan and report
+promptscope-cli     argv, exit, exec of the Go updater
    │
    ▼
-PromptscopeKit      per-agent parsers, library scan, counting
+PromptscopeKit      sessions, scan, report, skill, parsers, library scan
 ```
 
-`promptscope-cli` imports `PromptscopeKit`. The Kit imports neither SwiftUI nor the CLI. Parsers do not live in the CLI. The window does not link the Kit. It lists sessions with its own Rust scanner (same directories and noise rules) and calls the installed CLI for `report <source> <path> --json` and `update`.
+`promptscope-cli` imports `PromptscopeKit`. The Kit imports neither SwiftUI nor the CLI. Parsers do not live in the CLI. Session listing uses `LibraryScanner` only. The window does not link the Kit. It lists sessions with its own Rust scanner (same directories, noise rules, and `<source>:<session>` ids) and calls the installed CLI for `report <source> <path> --json` and `update`. It does not pass `--section`, `--summary`, `--no-text`, or `--max-bytes`. The default JSON object is unchanged.
+
+`promptscope version` and `promptscope schema` describe the CLI for an agent. `version --json` prints the name, the release version, `schemaVersion` 1 and `commit` (`null` in this Swift build). `schema --json` prints a JSON Schema (draft 2020-12) for each command output. `schemas/v1/*.json` is the canonical copy. `EmbeddedSchemas` in the Kit holds the same bytes. `skills/promptscope/SKILL.md` is the skill source of truth; `EmbeddedSkill` holds the same bytes. `scripts/embed-assets.py` regenerates both. The binary does not use a resource bundle. A failed `--json` command prints `{"error":...}` on stdout and exits with `error.exit` (2 usage, 3 unavailable, 4 protocol, 5 failed, 8 drift). `skill check` drift still prints the check object.
 
 `promptscope update` is not in the Kit. The Swift CLI looks for `promptscope-update-X.Y.Z` next to itself and execs that Go binary. The Go binary downloads the assets `promptscope-vX.Y.Z-darwin-arm64` and `promptscope-update-vX.Y.Z-darwin-arm64`, checks the GitHub digest, then swaps the `~/.local/bin/promptscope` symlink.
 

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/skill-check.json",
+  "title": "skill check",
+  "description": "promptscope skill check --json. Drift exits 8 and still prints this object, not the error envelope. A missing directory exits 3 with the error envelope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dest",
+    "inSync",
+    "missing",
+    "different",
+    "extra"
+  ],
+  "properties": {
+    "dest": {
+      "type": "string",
+      "description": "Absolute skill directory that was compared."
+    },
+    "inSync": {
+      "type": "boolean"
+    },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "different": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extra": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

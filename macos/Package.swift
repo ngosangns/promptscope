@@ -15,7 +15,9 @@ let package = Package(
         .testTarget(
             name: "PromptscopeKitTests",
             dependencies: ["PromptscopeKit"],
-            path: "Tests/PromptscopeKitTests"
+            path: "Tests/PromptscopeKitTests",
+            // Golden JSON is read from disk in the test. It is not a resource.
+            exclude: ["Fixtures"]
         ),
     ]
 )

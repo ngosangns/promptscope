@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/version.json",
+  "title": "version",
+  "description": "promptscope version --json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "schemaVersion", "commit"],
+  "properties": {
+    "name": {
+      "enum": ["promptscope"]
+    },
+    "version": {
+      "type": "string",
+      "description": "Release version X.Y.Z, or 0.0.0-dev for a local build."
+    },
+    "schemaVersion": {
+      "description": "Contract version. v1 is the frozen output shape.",
+      "enum": [1]
+    },
+    "commit": {
+      "type": ["string", "null"],
+      "description": "Git commit when the build knows it. The Swift CLI has none, so this is null."
+    }
+  }
+}

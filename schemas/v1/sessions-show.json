@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/sessions-show.json",
+  "title": "sessions show",
+  "description": "promptscope sessions show <id> --json. One library row plus the same summary numbers as report --summary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session",
+    "summary"
+  ],
+  "properties": {
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One session row. id matches promptscope-gpui scan.rs: <source>:<session>, for example grok:<id>, kiro-ide:<id>, kiro-cli:<id>, omp:<id>, pi:<id>, devin:<id>, dsh:<id>.",
+      "required": [
+        "id",
+        "source",
+        "title",
+        "cwd",
+        "model",
+        "agent",
+        "createdAt",
+        "updatedAt",
+        "locator",
+        "transcriptBytes",
+        "isSubagent",
+        "isTemporary",
+        "contextPercent"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Window id <source>:<session>. The source is the AgentSource raw value."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "grok",
+            "kiro-ide",
+            "kiro-cli",
+            "omp",
+            "pi",
+            "devin",
+            "dsh"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "description": "Title from session metadata. This can be user text. The transcript is not included."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory recorded in the log. Empty when the log has none."
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO 8601 UTC, or null when the log has no creation time."
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO 8601 UTC, or null when the log has no update time."
+        },
+        "locator": {
+          "type": "string",
+          "description": "Absolute path of the session directory or log file."
+        },
+        "transcriptBytes": {
+          "type": "integer",
+          "description": "Size of the transcript file in bytes, not the measured text."
+        },
+        "isSubagent": {
+          "type": "boolean"
+        },
+        "isTemporary": {
+          "type": "boolean",
+          "description": "True when cwd is under /tmp or /var/folders."
+        },
+        "contextPercent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Recorded context percent, or null when the scan did not see one."
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Totals from a full report. estimatedTokens is standingBytes / 4. heavy labels are tool names, not result text.",
+      "required": [
+        "standingBytes",
+        "transcriptBytes",
+        "estimatedTokens",
+        "contextPercent",
+        "contextWindow",
+        "promptTokens",
+        "counts",
+        "heavy",
+        "truncated"
+      ],
+      "properties": {
+        "standingBytes": {
+          "type": "integer",
+          "description": "Sum of standing-prompt slices."
+        },
+        "transcriptBytes": {
+          "type": "integer",
+          "description": "Sum of transcript slices. This is measured text, not the file size."
+        },
+        "estimatedTokens": {
+          "type": "integer",
+          "description": "standingBytes / 4. Not the model tokenizer."
+        },
+        "contextPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "contextWindow": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "promptTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Provider-recorded prompt tokens, or null."
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sections",
+            "skills",
+            "mcp",
+            "tools",
+            "turns",
+            "entries"
+          ],
+          "properties": {
+            "sections": {
+              "type": "integer"
+            },
+            "skills": {
+              "type": "integer"
+            },
+            "mcp": {
+              "type": "integer"
+            },
+            "tools": {
+              "type": "integer"
+            },
+            "turns": {
+              "type": "integer"
+            },
+            "entries": {
+              "type": "integer"
+            }
+          }
+        },
+        "heavy": {
+          "type": "array",
+          "maxItems": 5,
+          "description": "Up to five heaviest tool results. label is the tool name.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "bytes"
+            ],
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when the analyzer stopped early or --max-bytes dropped items."
+        }
+      }
+    }
+  }
+}

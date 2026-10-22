@@ -1,0 +1,415 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/report-redacted.json",
+  "title": "report redacted",
+  "description": "promptscope report --no-text --json. Same keys as the full report. sections[].preview, skills[].summary, mcp[].blurb, turns[].preview, and entries[].label are null because they can contain transcript, user, or tool content. Names, kinds, statuses, paths, notes, and numbers stay. notes are analyzer messages, not the transcript.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standing",
+    "transcript",
+    "sections",
+    "skills",
+    "mcp",
+    "tools",
+    "turns",
+    "heavy",
+    "steering",
+    "notes",
+    "contextPercent",
+    "contextWindow",
+    "promptTokens",
+    "truncated",
+    "entries"
+  ],
+  "properties": {
+    "standing": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slice"
+      },
+      "description": "Bytes the model carries before the conversation, split by kind."
+    },
+    "transcript": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slice"
+      },
+      "description": "Bytes in the log, split by kind. Compaction can make the live context smaller."
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/section"
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/skill"
+      }
+    },
+    "mcp": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mcp"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tool"
+      }
+    },
+    "turns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/turn"
+      }
+    },
+    "heavy": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/heavy"
+      }
+    },
+    "steering": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/namedBytes"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "contextPercent": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Recorded context percent, or null when the log has none."
+    },
+    "contextWindow": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Recorded token window, or null when the log has none."
+    },
+    "promptTokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Provider-recorded prompt tokens of the last model turn, or null when the log has none."
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "description": "Trajectory events. The Codable index is not part of this object."
+    }
+  },
+  "$defs": {
+    "slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "bytes"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "system",
+            "skills",
+            "mcp",
+            "rules",
+            "toolDefs",
+            "user",
+            "assistant",
+            "toolResult",
+            "reasoning",
+            "steering",
+            "other"
+          ]
+        },
+        "bytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "bytes",
+        "preview"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "With --no-text, null. Otherwise a short excerpt that can contain prompt or user text."
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "catalogBytes",
+        "summary",
+        "origin",
+        "readCount"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "catalogBytes": {
+          "type": "integer"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "With --no-text, null. Otherwise the skill catalog summary, which is free text."
+        },
+        "path": {
+          "type": "string",
+          "description": "Omitted when the catalog names no file. Never null."
+        },
+        "origin": {
+          "type": "string"
+        },
+        "diskBytes": {
+          "type": "integer",
+          "description": "Omitted when the file was not measured. Never null."
+        },
+        "readCount": {
+          "type": "integer"
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "catalogBytes",
+        "status",
+        "tools",
+        "blurb"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "catalogBytes": {
+          "type": "integer"
+        },
+        "toolCount": {
+          "type": "integer",
+          "description": "Omitted when the log does not say how many tools the server has. Never null."
+        },
+        "status": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blurb": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "With --no-text, null. Otherwise the MCP server blurb, which can quote the catalog."
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "definitionBytes",
+        "calls",
+        "resultBytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "definitionBytes": {
+          "type": "integer"
+        },
+        "calls": {
+          "type": "integer"
+        },
+        "resultBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "turn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "preview",
+        "userBytes",
+        "replyBytes"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "With --no-text, null. Otherwise a short excerpt that can contain prompt or user text."
+        },
+        "userBytes": {
+          "type": "integer"
+        },
+        "replyBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "heavy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "tool",
+        "bytes"
+      ],
+      "properties": {
+        "rank": {
+          "type": "integer"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "namedBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "bytes",
+        "detail"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "turn",
+        "kind",
+        "label",
+        "bytes",
+        "durationMs",
+        "failed",
+        "tokens"
+      ],
+      "properties": {
+        "at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Wall-clock milliseconds, or null when the log has no clock."
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "user",
+            "reasoning",
+            "assistant",
+            "tool",
+            "subagent",
+            "compaction",
+            "approval",
+            "retry",
+            "error",
+            "job",
+            "notice"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "With --no-text, null, because the label can embed a message preview or tool arguments. A default report keeps the label. Tool names on tools and heavy stay."
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "durationMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Milliseconds, or null when the log records no duration."
+        },
+        "failed": {
+          "type": "boolean"
+        },
+        "tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Recorded prompt tokens for this event, or null when the log has none."
+        }
+      }
+    }
+  }
+}

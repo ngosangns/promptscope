@@ -253,19 +253,19 @@ enum GrokAnalyzer {
             return Slice(kind: kind, bytes: bytes)
         }
 
-        let rankedTools = tools
-            .filter { $0.definitionBytes > 0 || $0.calls > 0 || $0.resultBytes > 0 }
-            .sorted { ($0.resultBytes + $0.definitionBytes, $0.calls) > ($1.resultBytes + $1.definitionBytes, $1.calls) }
+        let rankedTools = StableOrder.toolsByWeight(
+            tools.filter { $0.definitionBytes > 0 || $0.calls > 0 || $0.resultBytes > 0 }
+        )
 
-        let heavyRanked = heavy.enumerated().map { HeavyResult(rank: $0.offset + 1, tool: $0.element.0, bytes: $0.element.1) }
+        let heavyRanked = StableOrder.heavy(heavy)
 
         return SessionReport(
             ref: ref,
             standing: standing,
             transcript: composition,
             sections: sections,
-            skills: skills.sorted { $0.catalogBytes > $1.catalogBytes },
-            mcp: mcp.sorted { $0.catalogBytes > $1.catalogBytes },
+            skills: StableOrder.skillsByCatalog(skills),
+            mcp: StableOrder.mcpByCatalog(mcp),
             tools: rankedTools,
             turns: turns,
             trajectory: trajectory,

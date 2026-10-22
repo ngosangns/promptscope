@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/schema.json",
+  "title": "schema",
+  "description": "promptscope schema --json. The catalog of commands and the schema of each JSON output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "schemaVersion",
+    "commands",
+    "error"
+  ],
+  "properties": {
+    "name": {
+      "enum": [
+        "promptscope"
+      ]
+    },
+    "schemaVersion": {
+      "enum": [
+        1
+      ]
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessions list",
+        "sessions show",
+        "scan",
+        "report",
+        "update",
+        "skill install",
+        "skill check",
+        "version",
+        "schema"
+      ],
+      "properties": {
+        "sessions list": {
+          "$ref": "#/$defs/command"
+        },
+        "sessions show": {
+          "$ref": "#/$defs/command"
+        },
+        "scan": {
+          "$ref": "#/$defs/command"
+        },
+        "report": {
+          "$ref": "#/$defs/command"
+        },
+        "update": {
+          "$ref": "#/$defs/command"
+        },
+        "skill install": {
+          "$ref": "#/$defs/command"
+        },
+        "skill check": {
+          "$ref": "#/$defs/command"
+        },
+        "version": {
+          "$ref": "#/$defs/command"
+        },
+        "schema": {
+          "$ref": "#/$defs/command"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "description": "JSON Schema for the --json error document."
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "mutates",
+        "destructive",
+        "flags",
+        "output"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "mutates": {
+          "type": "boolean"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "JSON Schema for the command's --json output, or null when the command prints text only."
+        }
+      }
+    }
+  }
+}

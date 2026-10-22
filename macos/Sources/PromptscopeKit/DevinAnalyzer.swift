@@ -167,9 +167,7 @@ enum DevinAnalyzer {
             "Input tokens are prompt_tokens of the last agent turn, not byte/4.",
         ]
         if truncated { notes.append("The file is larger than 12 MB and was not read in full.") }
-        let ranked = heavy.sorted { $0.1 > $1.1 }.prefix(8).enumerated().map { index, item in
-            HeavyResult(rank: index + 1, tool: item.0, bytes: item.1)
-        }
+        let ranked = StableOrder.heavy(heavy)
         return SessionReport(
             ref: ref,
             standing: Slice.pack(standing),
@@ -177,7 +175,7 @@ enum DevinAnalyzer {
             sections: sections,
             skills: skills,
             mcp: mcp,
-            tools: tools.values.sorted { $0.calls > $1.calls },
+            tools: StableOrder.toolsByCalls(tools.values),
             turns: turns,
             trajectory: trajectory,
             heavy: ranked,

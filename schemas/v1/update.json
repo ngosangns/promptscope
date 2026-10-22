@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/update.json",
+  "title": "update",
+  "description": "promptscope update --json, from the Go updater. On failure the string field error is added. That field is not the contract error envelope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["current", "latest", "updateAvailable", "asset", "installPath"],
+  "properties": {
+    "current": {
+      "type": "string",
+      "description": "This binary's X.Y.Z version."
+    },
+    "latest": {
+      "type": ["string", "null"],
+      "description": "Latest release version, or null when the release could not be read."
+    },
+    "updateAvailable": {
+      "type": "boolean"
+    },
+    "asset": {
+      "type": ["string", "null"],
+      "description": "Release asset name, or null when the release could not be read."
+    },
+    "installPath": {
+      "type": "string",
+      "description": "Symlink path before a release is known, otherwise the versioned path the updater would install."
+    },
+    "error": {
+      "type": "string",
+      "description": "Present only when the update failed. Omitted on success. Never null."
+    }
+  }
+}

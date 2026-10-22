@@ -6,7 +6,7 @@ Measures what takes up the context of your **Grok**, **Kiro**, **OMP**, **Pi**, 
 
 It reads local logs. It never sends a session anywhere.
 
-The measuring code lives in `macos/Sources/PromptscopeKit`. The CLI is `macos/Sources/promptscope-cli` (`scan`, `report`, `update`). The window is `promptscope-gpui` in the sibling repo `ns-gpui`; this repo has no UI. How the layers depend on each other is described in [ARCHITECTURE.md](ARCHITECTURE.md).
+The measuring code lives in `macos/Sources/PromptscopeKit`. The CLI is `macos/Sources/promptscope-cli` (`sessions`, `scan`, `report`, `skill`, `update`). The window is `promptscope-gpui` in the sibling repo `ns-gpui`; this repo has no UI. How the layers depend on each other is described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What Promptscope measures
 
@@ -40,11 +40,11 @@ Tokens marked `~` are `byte / 4`. That is not the model's tokenizer. For Kiro CL
 
 ## Screenshots
 
-The window is `promptscope-gpui` (dark theme, 1440×900). The left sidebar is cropped out of the desktop shots. They show sessions of open-source dev work on this repo, `ns-gpui` and `synca`.
+The window is `promptscope-gpui` (dark theme, 1440×900). The left sidebar is cropped out of the desktop shots. They show sessions of open-source dev work on the `synca` repo.
 
 ![Workspace page: prompt components, skills and MCP servers, session list](docs/screenshots/workspace.png)
 
-Workspace page (`synca`). Left: sessions and transcript size for the current filters, then what every request carries before the conversation starts (prompt components, skills, MCP servers), summed over the sessions in view. Right: search, source chips and the sessions of that workspace.
+Workspace page (`synca`), opened from the workspace list in the sidebar. Left: sessions and transcript size for the current filters, then what every request carries before the conversation starts (prompt components, skills, MCP servers), summed over the sessions in view. Right: search, source chips and the sessions of that workspace.
 
 ![Session page, Conversation tab](docs/screenshots/conversation.png)
 
@@ -92,13 +92,24 @@ task cli:build     # release CLI only, built in macos/.build
 ## CLI
 
 ```
-promptscope scan
-promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path> [--json]
+promptscope sessions list [--json] [--source S] [--since ISO|7d] [--cwd PATH] [--query TEXT] [--limit N] [--include-subagents] [--include-temporary]
+promptscope sessions show <id> [--json]
+promptscope scan [--json]
+promptscope report <id> [--json] [--section NAME] [--summary] [--no-text] [--max-bytes N]
+promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path> [--json] [--section NAME] [--summary] [--no-text] [--max-bytes N]
+promptscope skill install [--dest DIR] [--json] [--dry-run]
+promptscope skill check [--dest DIR] [--json]
 promptscope update [--check] [--json] [--force]
+promptscope version [--json]
+promptscope schema [--json] [<command>]
 promptscope --version
 ```
 
-`scan` lists how many sessions each source has and prints the notes for sources that were not found:
+`sessions list` prints one line per session, newest first: id, updated time, source, transcript bytes, cwd, title. The id is `<source>:<session>` (`grok:…`, `kiro-ide:…`, `kiro-cli:…`, `omp:…`, `pi:…`, `devin:…`, `dsh:…`). Subagents and sessions under `/tmp` or `/var/folders` are hidden unless the matching flag is set. `--query` matches title, cwd, id, model, agent, and source. It does not read transcript text. `--json` prints `{"sessions":[...]}`.
+
+`sessions show <id>` prints that one row plus the same summary numbers as `report --summary`. A missing id exits 3.
+
+`scan` lists how many sessions each source has and prints the notes for sources that were not found. That text is unchanged:
 
 ```
 sessions 3008
@@ -109,9 +120,19 @@ sessions 3008
 empty cli skipped 11409
 ```
 
-`report` measures one session and prints a plain-text report: standing prompt split by component, system prompt sections, skills, MCP servers, up to 20 tools, a one-line trajectory summary, Kiro steering files, and the context percent when the log has it. The source argument may also be a library id such as `dsh:<session>`; only the part before the colon is used.
+`scan --json` prints `{"sessions":N,"bySource":{...},"skippedEmptyCli":N,"notes":[...]}`.
 
-`report ... --json` writes one object with the keys `standing`, `transcript`, `sections`, `skills`, `mcp`, `tools`, `turns`, `heavy`, `steering`, `notes`, `contextPercent`, `contextWindow`, `promptTokens`, `truncated` and `entries`. Each entry of `entries` is one trajectory event: `at`, `turn`, `kind`, `label`, `bytes`, `durationMs`, `failed`, `tokens`. The window reads this output.
+`report` measures one session and prints a plain-text report: standing prompt split by component, system prompt sections, skills, MCP servers, up to 20 tools, a one-line trajectory summary, Kiro steering files, and the context percent when the log has it. `report <id>` looks the id up. `report <source> <path>` does not: a source such as `dsh:<session>` still uses only the part before the colon, and `<path>` is the locator. The window calls that two-argument form.
+
+`report ... --json` with no extra flags writes one object with the keys `standing`, `transcript`, `sections`, `skills`, `mcp`, `tools`, `turns`, `heavy`, `steering`, `notes`, `contextPercent`, `contextWindow`, `promptTokens`, `truncated` and `entries`. Each entry of `entries` is one trajectory event: `at`, `turn`, `kind`, `label`, `bytes`, `durationMs`, `failed`, `tokens`. The window reads this output. That shape is schema v1 and stays as it is.
+
+`--section` (repeatable, or a comma list) returns only those keys. `--summary` returns totals: standing bytes, transcript composition bytes, estimated tokens (`standing bytes / 4`), context numbers, counts, and the top 5 heavy tool labels with byte sizes and no text. `--no-text` keeps the full shape and sets free-text fields that can hold transcript, user, or tool content to null. `--max-bytes N` shortens arrays until the document fits and sets `truncated` to true. Agents should use `--summary` or `--no-text` unless the user asked for transcript text.
+
+`skill install` copies `skills/promptscope/SKILL.md` to `--dest` (default `~/.agents/skills/promptscope`). It mutates that directory. `--dry-run` prints the path and writes nothing. `skill check` compares the installed copy with the bytes embedded in the binary and exits 8 on drift, 3 if the directory is missing. The file in the repository is the source of truth; `scripts/embed-assets.py` regenerates the Swift constants.
+
+`version` prints the same line as `--version`. `version --json` prints `name`, `version`, `schemaVersion` and `commit`.
+
+`schema` prints one line per command: the path, `R` (read), `M` (mutates) or `D` (destructive), and a summary. `skill install` is `M`. `schema --json` prints a JSON Schema (draft 2020-12) for each command's JSON output. The files in `schemas/v1/` are that schema. The CLI embeds the same text. `update --json` is the updater's own object. With `--json`, an error is one `{"error":{"code","exit","message","hint"}}` object on stdout, and the process exit code is `error.exit`: 2 usage, 3 unavailable (missing file or session), 4 unparsable log, 5 failed, 8 skill drift. `skill check` on drift prints the check object, not the error envelope.
 
 The path is the session's locator:
 

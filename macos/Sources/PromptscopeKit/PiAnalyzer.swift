@@ -145,17 +145,15 @@ private struct Accumulator {
         if truncated {
             notes.append("The file is longer than the part that was read. Open the session to read more.")
         }
-        let heavyRanked = heavy.sorted { $0.bytes > $1.bytes }.prefix(8).enumerated().map { index, item in
-            HeavyResult(rank: index + 1, tool: item.tool, bytes: item.bytes)
-        }
+        let heavyRanked = StableOrder.heavy(heavy.map { ($0.tool, $0.bytes) })
         return SessionReport(
             ref: ref,
             standing: Slice.pack(standing),
             transcript: Slice.pack(transcript),
             sections: sections,
-            skills: skills.sorted { $0.catalogBytes > $1.catalogBytes },
+            skills: StableOrder.skillsByCatalog(skills),
             mcp: mcp,
-            tools: tools.values.sorted { $0.calls > $1.calls },
+            tools: StableOrder.toolsByCalls(tools.values),
             turns: turns,
             trajectory: trajectory,
             heavy: heavyRanked,

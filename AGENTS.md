@@ -8,9 +8,10 @@ The window is `promptscope-gpui` in the sibling repo `ns-gpui`. This repo has no
 
 How the Kit and the CLI fit together is described in `ARCHITECTURE.md`.
 
-- `macos/Sources/PromptscopeKit` — models, parsers, library scan. No UI imports. Unit-tested.
-- `macos/Sources/promptscope-cli` — `report`, `scan`, and `update` (execs the Go updater).
+- `macos/Sources/PromptscopeKit` — models, parsers, library scan, and the CLI commands. No UI imports. Unit-tested.
+- `macos/Sources/promptscope-cli` — argv only. `sessions`, `scan`, `report`, `skill`, `version`, and `schema` run in the Kit. `update` execs the Go updater.
 - `go/cmd/promptscope` — `promptscope update` only. Scan and report stay in Swift.
+- `skills/promptscope/SKILL.md` — agent skill. `schemas/v1/` — JSON Schema for every `--json` output. Both are embedded; regenerate with `scripts/embed-assets.py`.
 - `Taskfile.yml` is the entry point: `task test`, `task cli:install`, `task release:build`, `task release:publish`.
 
 ## Sharp edges
@@ -27,3 +28,7 @@ How the Kit and the CLI fit together is described in `ARCHITECTURE.md`.
 - Skill names require a path that contains `/skills/` and a real `SKILL.md` segment. `but` is a real GitButler skill, not noise.
 - `VERSION` is the release source of truth. `task release:build` tests and writes `dist/`. `task release:publish` and a `v*` tag upload the CLI, the updater, and `SHA256SUMS`. Do not commit `dist/`.
 - `promptscope update` is the Go binary next to the versioned CLI (`promptscope-update-X.Y.Z`). It refuses a binary that is not that install, refuses a downgrade, and checks the GitHub asset digest before swapping the symlink. The Swift CLI's `--version` line is `promptscope X.Y.Z`; the release script stamps `releaseVersion` from `VERSION` for that build and restores the source.
+- Session ids are `<source>:<session>` and match `promptscope-gpui` `scan.rs`. `sessions list` hides subagents and temporary cwds unless asked. `sessions show` and `report <id>` search the full scan. `report <source> <path>` does not look the id up.
+- Default `report --json` and `scan` text stay what the window already parses. New report flags are opt-in. Dictionary-backed arrays (Pi/Grok/Kiro/Devin/DSH tools, skills, MCP, heavy ties) use a total order in `Order.swift`.
+- Exit codes: 2 usage, 3 missing file or session, 4 unparsable log, 5 failed, 8 skill drift. `--json` errors are one object on stdout. `skill check` drift prints the check object and exits 8.
+- Tests use fixtures and temp directories only. Never point a test at a real session home, `~/.agents`, or `~/.local`. `skill install` in a test must pass `--dest`.

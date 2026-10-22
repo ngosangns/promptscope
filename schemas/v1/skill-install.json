@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/skill-install.json",
+  "title": "skill install",
+  "description": "promptscope skill install --json. dryRun is true when nothing was written.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dest",
+    "dryRun",
+    "files"
+  ],
+  "properties": {
+    "dest": {
+      "type": "string",
+      "description": "Absolute skill directory."
+    },
+    "dryRun": {
+      "type": "boolean"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Relative paths written, or that would be written."
+    }
+  }
+}

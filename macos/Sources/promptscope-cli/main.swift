@@ -11,130 +11,15 @@ func fail(_ message: String) -> Never {
 /// Marketing version. The release script replaces this assignment from the
 /// repo-root VERSION file before `swift build`, and checks the result with
 /// `--version`. `promptscope update` smoke-tests that same line.
-let releaseVersion = "0.0.0-dev"
+let releaseVersion = "0.1.5"
 
-guard let command = arguments.first else {
-    fail("usage: promptscope scan | report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path> | update")
-}
-
-switch command {
-case "--version", "-V", "version":
-    print("promptscope \(releaseVersion)")
-    exit(0)
-case "--help", "-h", "help":
-    print("""
-    promptscope — measures the prompt of sessions on this machine
-
-    usage: promptscope scan
-          promptscope report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path>
-          promptscope update [--check] [--json] [--force]
-    """)
-    exit(0)
-case "update":
-    runUpdate(Array(arguments.dropFirst()))
-default:
-    break
-}
-
-switch command {
-case "scan":
-    let scan = LibraryScanner.scan(
-        grokHome: LibraryScanner.defaultGrokHome,
-        kiroHome: LibraryScanner.defaultKiroHome,
-        ompHome: LibraryScanner.defaultOmpHome,
-        piHome: LibraryScanner.defaultPiHome,
-        devinHome: LibraryScanner.defaultDevinHome,
-        dshHome: LibraryScanner.defaultDshHome
-    )
-    let counts = Dictionary(grouping: scan.sessions, by: \.source).mapValues(\.count)
-    print("sessions \(scan.sessions.count)")
-    for source in AgentSource.allCases {
-        print("  \(source.label) \(counts[source] ?? 0)")
-    }
-    print("empty cli skipped \(scan.skippedEmptyCLI)")
-    for note in scan.notes { print(note) }
-case "report":
-    guard arguments.count >= 3 else {
-        fail("usage: promptscope-cli report grok|kiro-ide|kiro-cli|omp|pi|devin|dsh <path>")
-    }
-    // The window passes the library id (`dsh:<session>`) as the source argument.
-    let sourceName = arguments[1].split(separator: ":", maxSplits: 1).first.map(String.init) ?? arguments[1]
-    let source: AgentSource
-    switch sourceName {
-    case "grok": source = .grok
-    case "kiro-ide": source = .kiroIDE
-    case "kiro-cli": source = .kiroCLI
-    case "omp": source = .omp
-    case "pi": source = .pi
-    case "devin": source = .devin
-    case "dsh": source = .dsh
-    default: fail("source must be grok, kiro-ide, kiro-cli, omp, pi, devin, or dsh")
-    }
-    let path = URL(fileURLWithPath: arguments[2]).standardizedFileURL.path
-    let ref = SessionRef(
-        id: "\(source.rawValue):cli",
-        source: source,
-        sessionID: URL(fileURLWithPath: path).lastPathComponent,
-        title: URL(fileURLWithPath: path).lastPathComponent,
-        cwd: "",
-        model: nil,
-        agent: nil,
-        createdAt: nil,
-        updatedAt: nil,
-        locator: path,
-        transcriptBytes: 0,
-        isSubagent: false,
-        isTemporary: false,
-        contextPercent: nil,
-        fingerprint: "cli"
-    )
-    let report = SessionAnalyzer.report(for: ref)
-    if arguments.count >= 4, arguments[3] == "--json" {
-        // Encodes a Codable value as plain JSON objects, so the window reads the same
-        // fields the Kit holds and the CLI does not keep a second field list.
-        func plain<T: Encodable>(_ value: T) -> Any {
-            guard let data = try? JSONEncoder().encode(value),
-                  let object = try? JSONSerialization.jsonObject(with: data) else { return [] }
-            return object
-        }
-        let payload: [String: Any] = [
-            "standing": plain(report.standing),
-            "transcript": plain(report.transcript),
-            "sections": plain(report.sections),
-            "skills": plain(report.skills),
-            "mcp": plain(report.mcp),
-            "tools": plain(report.tools),
-            "turns": plain(report.turns),
-            "heavy": plain(report.heavy),
-            "steering": plain(report.steering),
-            "notes": report.notes,
-            "contextPercent": report.contextPercent as Any,
-            "contextWindow": report.contextWindow as Any,
-            "promptTokens": report.promptTokens as Any,
-            "truncated": report.truncated,
-            "entries": report.trajectory.map { entry in
-                [
-                    "at": entry.at as Any,
-                    "turn": entry.turn,
-                    "kind": entry.kind,
-                    "label": entry.label,
-                    "bytes": entry.bytes,
-                    "durationMs": entry.durationMs as Any,
-                    "failed": entry.failed,
-                    "tokens": entry.tokens as Any,
-                ] as [String: Any]
-            },
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let text = String(data: data, encoding: .utf8) else {
-            fail("could not write trajectory")
-        }
-        print(text)
-    } else {
-        print(ReportText.plain(report))
-    }
-default:
-    fail("unknown command: \(command)")
+switch PromptscopeDispatch.dispatch(arguments, releaseVersion: releaseVersion) {
+case .exit(let code, let out, let err):
+    if !out.isEmpty { fputs(out, stdout) }
+    if !err.isEmpty { fputs(err, stderr) }
+    exit(code)
+case .update(let args):
+    runUpdate(args)
 }
 
 /// `promptscope update` is the Go updater installed beside this binary. It

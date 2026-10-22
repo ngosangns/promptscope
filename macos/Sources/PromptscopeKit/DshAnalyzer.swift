@@ -308,9 +308,7 @@ enum DshAnalyzer {
             guard let promptTokens, let contextWindow, contextWindow > 0 else { return nil }
             return 100 * Double(promptTokens) / Double(contextWindow)
         }()
-        let ranked = heavy.sorted { $0.1 > $1.1 }.prefix(8).enumerated().map { index, item in
-            HeavyResult(rank: index + 1, tool: item.0, bytes: item.1)
-        }
+        let ranked = StableOrder.heavy(heavy)
         return SessionReport(
             ref: reportRef,
             standing: Slice.pack(standing),

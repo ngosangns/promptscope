@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/scan.json",
+  "title": "scan",
+  "description": "promptscope scan --json. Counts from LibraryScanner, including subagents and temporary sessions. Text mode is unchanged and is not this object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sessions",
+    "bySource",
+    "skippedEmptyCli",
+    "notes"
+  ],
+  "properties": {
+    "sessions": {
+      "type": "integer",
+      "description": "Sessions the scanner returned."
+    },
+    "bySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grok",
+        "kiro-ide",
+        "kiro-cli",
+        "omp",
+        "pi",
+        "devin",
+        "dsh"
+      ],
+      "properties": {
+        "grok": {
+          "type": "integer"
+        },
+        "kiro-ide": {
+          "type": "integer"
+        },
+        "kiro-cli": {
+          "type": "integer"
+        },
+        "omp": {
+          "type": "integer"
+        },
+        "pi": {
+          "type": "integer"
+        },
+        "devin": {
+          "type": "integer"
+        },
+        "dsh": {
+          "type": "integer"
+        }
+      }
+    },
+    "skippedEmptyCli": {
+      "type": "integer",
+      "description": "Kiro CLI sidecars with an empty transcript, plus DSH logs that are not a v4 session with a turn."
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Scanner notes, such as a missing source directory. Not transcript text."
+    }
+  }
+}

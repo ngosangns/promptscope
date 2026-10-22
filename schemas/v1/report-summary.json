@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ngosangns/promptscope/schemas/v1/report-summary.json",
+  "title": "report summary",
+  "description": "promptscope report <id> --summary --json. Totals only. No transcript text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standingBytes",
+    "transcriptBytes",
+    "estimatedTokens",
+    "contextPercent",
+    "contextWindow",
+    "promptTokens",
+    "counts",
+    "heavy",
+    "truncated"
+  ],
+  "properties": {
+    "standingBytes": {
+      "type": "integer",
+      "description": "Sum of standing-prompt slices."
+    },
+    "transcriptBytes": {
+      "type": "integer",
+      "description": "Sum of transcript slices. This is measured text, not the file size."
+    },
+    "estimatedTokens": {
+      "type": "integer",
+      "description": "standingBytes / 4. Not the model tokenizer."
+    },
+    "contextPercent": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "contextWindow": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "promptTokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Provider-recorded prompt tokens, or null."
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sections",
+        "skills",
+        "mcp",
+        "tools",
+        "turns",
+        "entries"
+      ],
+      "properties": {
+        "sections": {
+          "type": "integer"
+        },
+        "skills": {
+          "type": "integer"
+        },
+        "mcp": {
+          "type": "integer"
+        },
+        "tools": {
+          "type": "integer"
+        },
+        "turns": {
+          "type": "integer"
+        },
+        "entries": {
+          "type": "integer"
+        }
+      }
+    },
+    "heavy": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "Up to five heaviest tool results. label is the tool name.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "bytes"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "True when the analyzer stopped early or --max-bytes dropped items."
+    }
+  }
+}
