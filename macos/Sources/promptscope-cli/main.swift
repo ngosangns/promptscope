@@ -11,7 +11,7 @@ func fail(_ message: String) -> Never {
 /// Marketing version. The release script replaces this assignment from the
 /// repo-root VERSION file before `swift build`, and checks the result with
 /// `--version`. `promptscope update` smoke-tests that same line.
-let releaseVersion = "0.1.5"
+let releaseVersion = "0.0.0-dev"
 
 switch PromptscopeDispatch.dispatch(arguments, releaseVersion: releaseVersion) {
 case .exit(let code, let out, let err):
