@@ -15,7 +15,7 @@ PromptscopeKit      sessions, scan, report, skill, parsers, library scan
 
 `promptscope version` and `promptscope schema` describe the CLI for an agent. `version --json` prints the name, the release version, `schemaVersion` 1 and `commit` (`null` in this Swift build). `schema --json` prints a JSON Schema (draft 2020-12) for each command output. `schemas/v1/*.json` is the canonical copy. `EmbeddedSchemas` in the Kit holds the same bytes. `skills/promptscope/SKILL.md` is the skill source of truth; `EmbeddedSkill` holds the same bytes. `scripts/embed-assets.py` regenerates both. The binary does not use a resource bundle. A failed `--json` command prints `{"error":...}` on stdout and exits with `error.exit` (2 usage, 3 unavailable, 4 protocol, 5 failed, 8 drift). `skill check` drift still prints the check object.
 
-`promptscope update` is not in the Kit. The Swift CLI looks for `promptscope-update-X.Y.Z` next to itself and execs that Go binary. The Go binary downloads the assets `promptscope-vX.Y.Z-darwin-arm64` and `promptscope-update-vX.Y.Z-darwin-arm64`, checks the GitHub digest, then swaps the `~/.local/bin/promptscope` symlink.
+`UpdaterLocator` in the Kit finds `promptscope-update-X.Y.Z` beside the resolved executable. The CLI execs that Go binary. The Go binary downloads the assets `promptscope-vX.Y.Z-darwin-arm64` and `promptscope-update-vX.Y.Z-darwin-arm64`, checks the GitHub digest, then swaps the `~/.local/bin/promptscope` symlink.
 
 Each `*Analyzer.swift` file handles one log format and produces the same result (`Report`). Adding an agent means adding an analyzer and a case in the CLI.
 

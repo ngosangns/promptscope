@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import PromptscopeKit
 
@@ -26,8 +27,10 @@ case .update(let args):
 /// replaces this file by renaming a new inode, which a running Mach-O cannot do
 /// to itself. A `swift run` build has no sibling and says so.
 func runUpdate(_ args: [String]) -> Never {
-    guard let updater = installedUpdater() else {
-        fail("promptscope update: promptscope-update not found next to this binary. Install with task cli:install or a release build.")
+    let executable = currentExecutablePath()
+    guard let updater = UpdaterLocator.find(executablePath: executable, releaseVersion: releaseVersion) else {
+        let searched = UpdaterLocator.searchedPath(executablePath: executable, releaseVersion: releaseVersion)
+        fail("promptscope update: promptscope-update not found next to this binary (searched \(searched)). Install with task cli:install or a release build.")
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: updater)
@@ -43,11 +46,36 @@ func runUpdate(_ args: [String]) -> Never {
     exit(process.terminationStatus)
 }
 
-func installedUpdater() -> String? {
-    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-    let sibling = executable.deletingLastPathComponent().appendingPathComponent("promptscope-update-\(releaseVersion)").path
-    if FileManager.default.isExecutableFile(atPath: sibling) {
-        return sibling
+/// Path the kernel executed. `CommandLine.arguments[0]` is only `promptscope`
+/// when the shell searched `PATH`, and that bare name is resolved against the
+/// working directory. Falls back to the bundle path, then argv[0].
+func currentExecutablePath() -> String {
+    var size = UInt32(PATH_MAX)
+    var buffer = [CChar](repeating: 0, count: Int(size))
+    let first = buffer.withUnsafeMutableBufferPointer { pointer -> Int32 in
+        guard let base = pointer.baseAddress else { return -1 }
+        return _NSGetExecutablePath(base, &size)
     }
-    return nil
+    if first == 0 {
+        return pathFromCString(buffer)
+    }
+    if size > 0 {
+        var retry = [CChar](repeating: 0, count: Int(size))
+        let second = retry.withUnsafeMutableBufferPointer { pointer -> Int32 in
+            guard let base = pointer.baseAddress else { return -1 }
+            return _NSGetExecutablePath(base, &size)
+        }
+        if second == 0 {
+            return pathFromCString(retry)
+        }
+    }
+    if let path = Bundle.main.executablePath {
+        return path
+    }
+    return CommandLine.arguments.first ?? "promptscope"
+}
+
+func pathFromCString(_ bytes: [CChar]) -> String {
+    let utf8 = bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+    return String(decoding: utf8, as: UTF8.self)
 }

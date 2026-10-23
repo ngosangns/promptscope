@@ -11,6 +11,55 @@ import (
 	"testing"
 )
 
+func TestDryRunAliasesCheck(t *testing.T) {
+	flags, err := parseUpdateArgs([]string{"--dry-run", "--json"}, "usage")
+	if err != nil || !flags.check || !flags.json || flags.force {
+		t.Fatalf("flags %+v err %v", flags, err)
+	}
+	if _, err := parseUpdateArgs([]string{"--check", "--dry-run"}, "usage"); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate dry-run: %v", err)
+	}
+
+	home := t.TempDir()
+	current := filepath.Join(home, ".local", "share", "promptscope", "bin", "promptscope-1.0.0")
+	if err := os.MkdirAll(filepath.Dir(current), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".local", "bin", "promptscope")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../share/promptscope/bin/promptscope-1.0.0", link); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("#!/bin/sh\n")
+	sum := sha256.Sum256(payload)
+	body := releaseJSON("v1.1.0", "promptscope-v1.1.0-darwin-arm64", uint64(len(payload)), "sha256:"+hex.EncodeToString(sum[:]), false, false)
+	var out, errOut strings.Builder
+	err = Run(context.Background(), Options{
+		Args:              []string{"--dry-run"},
+		Version:           "1.0.0",
+		Home:              home,
+		CurrentExe:        current,
+		PlatformSupported: boolPtr(true),
+		Transport:         staticTransport{latest: body, payload: payload},
+		Stdout:            &out,
+		Stderr:            &errOut,
+	})
+	if err != nil {
+		t.Fatal(err, errOut.String())
+	}
+	if !strings.Contains(out.String(), "is available") {
+		t.Fatalf("stdout %q stderr %q", out.String(), errOut.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(current), "promptscope-1.1.0")); !os.IsNotExist(statErr) {
+		t.Fatal("dry-run installed a release")
+	}
+}
+
 func TestParseReleaseRequiresDigestAndExactURL(t *testing.T) {
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	good := releaseJSON("v1.2.3", "promptscope-v1.2.3-darwin-arm64", 12, digest, false, false)

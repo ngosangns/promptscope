@@ -304,13 +304,13 @@ func parseUpdateArgs(args []string, usage string) (updateFlags, error) {
 	var flags updateFlags
 	for _, arg := range args {
 		switch {
-		case arg == "--check" && !flags.check:
+		case (arg == "--check" || arg == "--dry-run") && !flags.check:
 			flags.check = true
 		case arg == "--json" && !flags.json:
 			flags.json = true
 		case arg == "--force" && !flags.force:
 			flags.force = true
-		case arg == "--check" || arg == "--json" || arg == "--force":
+		case arg == "--check" || arg == "--dry-run" || arg == "--json" || arg == "--force":
 			return flags, fmt.Errorf("duplicate flag: %s", arg)
 		case strings.HasPrefix(arg, "-"):
 			return flags, fmt.Errorf("unknown flag: %s", arg)
